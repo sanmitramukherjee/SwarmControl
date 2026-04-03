@@ -10,6 +10,10 @@ import time
 import queue
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
+# ---- Configuration constants ----
+OUTBOUND_QUEUE_SIZE = 256   # Max messages buffered for WebSocket broadcast before dropping oldest
+LOG_RATE_LIMIT_HZ   = 10.0  # Max log messages broadcast per second to avoid flooding clients
+
 # ------------------- lightweight WebSocket Server -------------------
 class WebSocketHandler:
     def __init__(self, conn, addr, server):
@@ -161,15 +165,15 @@ class IntegratedServer:
         self.clients = []
         self.running = True
 
-        # Single outbound queue consumed by one sender thread
-        self._out_queue = queue.Queue(maxsize=256)
+        # Single outbound queue consumed by one sender thread (drops oldest when full)
+        self._out_queue = queue.Queue(maxsize=OUTBOUND_QUEUE_SIZE)
 
         # Telemetry deduplication: last broadcast snapshot per drone
         self._last_telem = {}
         self._telem_lock = threading.Lock()
 
-        # Log-rate throttle: max 10 msgs/s
-        self._log_tokens = 10.0
+        # Log-rate throttle using token bucket
+        self._log_tokens = LOG_RATE_LIMIT_HZ
         self._log_last_refill = time.monotonic()
         self._log_lock = threading.Lock()
 
@@ -227,7 +231,9 @@ class IntegratedServer:
         try:
             self._out_queue.put_nowait(msg)
         except queue.Full:
-            # Drop oldest, enqueue new
+            # Queue is full: drop the oldest item to make room for the newest.
+            # This is safe — the sender loop uses queue.Empty as a normal
+            # "nothing to send yet" signal; an extra Empty here is benign.
             try:
                 self._out_queue.get_nowait()
             except queue.Empty:
@@ -254,11 +260,12 @@ class IntegratedServer:
             self._enqueue({"type": "telemetry", "data": changed})
 
     def broadcast_log_throttled(self, text):
-        """Enqueue a log message, capped at 10 messages per second."""
+        """Enqueue a log message, capped at LOG_RATE_LIMIT_HZ messages per second."""
         now = time.monotonic()
         with self._log_lock:
             elapsed = now - self._log_last_refill
-            self._log_tokens = min(10.0, self._log_tokens + elapsed * 10.0)
+            self._log_tokens = min(LOG_RATE_LIMIT_HZ,
+                                   self._log_tokens + elapsed * LOG_RATE_LIMIT_HZ)
             self._log_last_refill = now
             if self._log_tokens >= 1.0:
                 self._log_tokens -= 1.0

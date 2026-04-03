@@ -16,6 +16,14 @@ import sys
 from pymavlink import mavutil
 from commands import arm_drone, takeoff, land, rtl, fly_to_gps, disarm_drone
 
+# ======================== Configuration Constants ========================
+DATA_STREAM_RATE_HZ      = 4     # MAVLink data stream request rate (Hz)
+HEARTBEAT_TIMEOUT_S      = 10.0  # Seconds without heartbeat before watchdog reconnects
+HEARTBEAT_WARN_S         = 3.0   # Seconds without heartbeat before GUI status turns red
+HEARTBEAT_WAIT_REAL_S    = 2.0   # Seconds to wait for heartbeats after serial connect
+METERS_PER_DEG_LAT       = 110574.0   # Approximate metres per degree of latitude
+METERS_PER_DEG_LON_EQ    = 111320.0   # Approximate metres per degree of longitude at equator
+
 # ======================== CLI Argument Parsing ========================
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -55,7 +63,7 @@ def parse_args():
 def _meters_to_deg(lat_deg):
     """Return (m_per_deg_lat, m_per_deg_lon) at the given latitude."""
     lat_rad = math.radians(lat_deg)
-    return 110574.0, 111320.0 * math.cos(lat_rad)
+    return METERS_PER_DEG_LAT, METERS_PER_DEG_LON_EQ * math.cos(lat_rad)
 
 
 def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
@@ -250,7 +258,7 @@ def connect_drones(mode, drone_specs, baud=57600):
             try:
                 shared_conn = SharedConnection(com_port, baud=baud)
                 shared_connections.append(shared_conn)
-                time.sleep(2)  # Allow heartbeats to arrive
+                time.sleep(HEARTBEAT_WAIT_REAL_S)  # Allow heartbeats to arrive
                 for sysid in sysids:
                     v_conn = VirtualConnection(shared_conn, sysid)
                     drone_list.append({"sysid": sysid, "connection": v_conn, "port": com_port})
@@ -280,7 +288,7 @@ def start_watchdog(drone_list, mode, baud):
                     continue
                 sysid = handler.sysid
                 age = time.time() - handler.last_heartbeat
-                if age > 10:
+                if age > HEARTBEAT_TIMEOUT_S:
                     broadcast_log(
                         f"[Watchdog] Drone {sysid} lost "
                         f"(no heartbeat for {age:.0f}s). Reconnecting..."
@@ -305,7 +313,7 @@ def start_watchdog(drone_list, mode, baud):
                                 f"[Watchdog] Reconnect failed for drone {sysid}: {e}"
                             )
                     broadcast_status({
-                        "drone_status": {"sysid": sysid, "connected": age <= 10}
+                        "drone_status": {"sysid": sysid, "connected": age <= HEARTBEAT_TIMEOUT_S}
                     })
 
     threading.Thread(target=_loop, daemon=True).start()
@@ -357,7 +365,7 @@ class BaseDroneHandler:
                 self.sysid,
                 self.connection.target_component,
                 mavutil.mavlink.MAV_DATA_STREAM_ALL,
-                4,  # 4 Hz
+                DATA_STREAM_RATE_HZ,
                 1,
             )
         except Exception:
@@ -649,7 +657,7 @@ def _build_gui_handler_class():
         def _check_connection_status(self):
             while True:
                 age = time.time() - self.last_heartbeat
-                color = COLORS['status_critical'] if age > 3 else COLORS['status_good']
+                color = COLORS['status_critical'] if age > HEARTBEAT_WARN_S else COLORS['status_good']
                 self.set_status_light(color)
                 time.sleep(1)
 

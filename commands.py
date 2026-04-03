@@ -30,9 +30,14 @@ def fly_to_gps(connection, systemID, lat, lon, alt, use_msl=False):
     """Fly to GPS coordinates.
 
     Args:
-        use_msl: When True, altitude is treated as MSL (MAV_FRAME_GLOBAL_INT).
-                 When False (default), altitude is relative to home
-                 (MAV_FRAME_GLOBAL_RELATIVE_ALT_INT).
+        connection: MAVLink connection object (mavlink_connection or VirtualConnection).
+        systemID:   Target drone system ID.
+        lat:        Target latitude in decimal degrees.
+        lon:        Target longitude in decimal degrees.
+        alt:        Target altitude in metres.
+        use_msl:    When True, altitude is treated as MSL (MAV_FRAME_GLOBAL_INT).
+                    When False (default), altitude is relative to home
+                    (MAV_FRAME_GLOBAL_RELATIVE_ALT_INT).
     """
     frame = (
         mavutil.mavlink.MAV_FRAME_GLOBAL_INT

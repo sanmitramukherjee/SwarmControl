@@ -411,11 +411,16 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
   <script>
+    // ======================== Configuration Constants ========================
+    const WS_URL                   = 'ws://localhost:8001';
+    const WS_INITIAL_RETRY_DELAY   = 1000;   // ms – first reconnect delay
+    const WS_MAX_DELAY             = 30000;  // ms – cap on exponential backoff
+    const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
+    const DRONE_LIST_UPDATE_MS     = 200;    // throttle drone-list DOM updates (ms)
+
     // ======================== WebSocket with Exponential Backoff ========================
-    const WS_URL = 'ws://localhost:8001';
     let ws = null;
-    let wsRetryDelay = 1000;
-    const WS_MAX_DELAY = 30000;
+    let wsRetryDelay = WS_INITIAL_RETRY_DELAY;
     let wsConnected = false;
 
     function connectWS() {
@@ -423,7 +428,7 @@
 
       ws.onopen = () => {
         wsConnected = true;
-        wsRetryDelay = 1000;
+        wsRetryDelay = WS_INITIAL_RETRY_DELAY;
         document.getElementById('sb-ws-val').textContent = 'CONNECTED';
         document.getElementById('reconnect-banner').style.display = 'none';
         document.getElementById('loading').style.display = 'none';
@@ -475,7 +480,7 @@
       div.className = `log-entry ${type}`;
       div.textContent = `> ${text}`;
       logContainer.appendChild(div);
-      if (logContainer.children.length > 150) logContainer.removeChild(logContainer.firstChild);
+      if (logContainer.children.length > MAX_LOG_ENTRIES) logContainer.removeChild(logContainer.firstChild);
       logContainer.scrollTop = logContainer.scrollHeight;
     }
 
@@ -780,7 +785,7 @@
 
       if (isDropdownOpen) {
         const now = Date.now();
-        if (now - lastListUpdate > 200) {
+        if (now - lastListUpdate > DRONE_LIST_UPDATE_MS) {
           renderDroneList();
           lastListUpdate = now;
         }
