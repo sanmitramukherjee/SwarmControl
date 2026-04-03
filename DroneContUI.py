@@ -78,13 +78,13 @@ def _meters_to_deg(lat_deg):
 
 def _haversine_m(lat1, lon1, lat2, lon2):
     """Horizontal distance in metres between two lat/lon points."""
-    R = 6_371_000
+    EARTH_RADIUS_M = 6_371_000
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = (math.sin(dlat / 2) ** 2
          + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
          * math.sin(dlon / 2) ** 2)
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return EARTH_RADIUS_M * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def check_formation_separation(positions_with_alt, min_sep_m=COLLISION_WARN_M):
@@ -164,8 +164,10 @@ def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
             ))
 
     else:
-        # Unknown pattern — stack all followers at leader position
-        positions = [(leader_lat, leader_lon)] * follower_count
+        # Unknown pattern — return empty list so the caller skips unknown followers
+        # rather than stacking all drones at the same position (collision hazard).
+        print(f"[Formation] Unknown pattern '{pattern}' – returning no follower positions.")
+        positions = []
 
     return positions
 
@@ -1045,9 +1047,9 @@ def main():
     else:
         print("[SwarmControl] Running in headless mode. Web dashboard: http://localhost:8000")
         print("Press Ctrl+C to quit.")
+        _shutdown = threading.Event()
         try:
-            while True:
-                time.sleep(1)
+            _shutdown.wait()  # blocks efficiently until interrupted
         except KeyboardInterrupt:
             pass
 

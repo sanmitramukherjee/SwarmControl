@@ -53,7 +53,7 @@ class WebSocketHandler:
                             break
                         try:
                             msg = json.loads(payload)
-                            if CMD_CALLBACK and msg.get("type") in (
+                            if CMD_CALLBACK and callable(CMD_CALLBACK) and msg.get("type") in (
                                 "swarm_command", "set_leader"
                             ):
                                 CMD_CALLBACK(msg)

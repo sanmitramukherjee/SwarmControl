@@ -458,8 +458,13 @@
     const WS_MAX_DELAY             = 30000;  // ms – cap on exponential backoff
     const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
     const DRONE_LIST_UPDATE_MS     = 200;    // throttle drone-list DOM updates (ms)
-    // Horizontal distance (metres) in 3D scene that triggers the collision warning
+    // 3D scene distance (metres) that triggers the collision warning
     const COLLISION_WARN_M         = 5.0;
+    // Three.js hex colours for drone body material
+    const DRONE_NORMAL_COLOR       = 0x00d4ff;
+    const DRONE_COLLISION_COLOR    = 0xff2222;
+    const DRONE_NORMAL_EMISSIVE    = 0x0044aa;
+    const DRONE_COLLISION_EMISSIVE = 0x550000;
 
     // ======================== Panel Toggle ========================
     function togglePanel(bodyId, arrowId) {
@@ -731,34 +736,41 @@
 
     function checkCollisionProximity() {
       const ids = Object.keys(drones);
-      let anyClose = false;
+      if (ids.length < 2) {
+        collisionBanner.style.display = 'none';
+        return;
+      }
+
+      // First pass: determine which drones are in violation across ALL pairs
+      const violators = new Set();
 
       for (let i = 0; i < ids.length; i++) {
         for (let j = i + 1; j < ids.length; j++) {
           const pi = drones[ids[i]].mesh.position;
           const pj = drones[ids[j]].mesh.position;
+          // distanceTo gives true 3D Euclidean distance (Y = altitude in scene metres)
           const dist = pi.distanceTo(pj);
 
           if (dist < COLLISION_WARN_M) {
-            anyClose = true;
-            // Tint both drones red
-            setDroneTint(ids[i], 0xff2222);
-            setDroneTint(ids[j], 0xff2222);
+            violators.add(ids[i]);
+            violators.add(ids[j]);
 
-            // Log at most once every 5 s
+            // Throttled log (at most once every 5 s)
             const now = Date.now();
             if (now - collisionLogThrottle > 5000) {
               collisionLogThrottle = now;
               log(`⚠ COLLISION: Drone #${ids[i]} & #${ids[j]} are ${dist.toFixed(1)}m apart!`, 'error');
             }
-          } else {
-            setDroneTint(ids[i], 0x00d4ff);
-            setDroneTint(ids[j], 0x00d4ff);
           }
         }
       }
 
-      collisionBanner.style.display = anyClose ? 'block' : 'none';
+      // Second pass: apply tints based on accumulated violation set
+      ids.forEach(id => {
+        setDroneTint(id, violators.has(id) ? DRONE_COLLISION_COLOR : DRONE_NORMAL_COLOR);
+      });
+
+      collisionBanner.style.display = violators.size > 0 ? 'block' : 'none';
     }
 
     // Cache body materials per drone for fast tinting
@@ -776,7 +788,9 @@
       const mat = _droneTintCache[sysid];
       if (mat && mat.color.getHex() !== color) {
         mat.color.setHex(color);
-        mat.emissive.setHex(color === 0xff2222 ? 0x550000 : 0x0044aa);
+        mat.emissive.setHex(
+          color === DRONE_COLLISION_COLOR ? DRONE_COLLISION_EMISSIVE : DRONE_NORMAL_EMISSIVE
+        );
       }
     }
 
@@ -784,7 +798,9 @@
     function createDrone(sysid) {
       const group = new THREE.Group();
 
-      const mat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, emissive: 0x0044aa, emissiveIntensity: 0.5 });
+      const mat = new THREE.MeshPhongMaterial({
+        color: DRONE_NORMAL_COLOR, emissive: DRONE_NORMAL_EMISSIVE, emissiveIntensity: 0.5
+      });
       group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 1), mat));
 
       const armMat = new THREE.MeshBasicMaterial({ color: 0x555555 });
