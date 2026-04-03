@@ -79,14 +79,22 @@
       overflow: hidden;
     }
 
-    /* ---- Sidebar (Logs) 22% ---- */
+    /* ---- Sidebar (Logs) – collapsible ---- */
     #sidebar {
       width: 22%;
+      min-width: 22%;
       background-color: var(--bg-panel);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
       z-index: 10;
+      transition: width 0.25s ease, min-width 0.25s ease;
+      overflow: hidden;
+    }
+
+    #sidebar.collapsed {
+      width: 36px;
+      min-width: 36px;
     }
 
     .sidebar-header {
@@ -99,7 +107,28 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
+    .sidebar-header:hover { background: rgba(0,212,255,0.05); }
+
+    #sidebar-toggle {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0 0 0 8px;
+      line-height: 1;
+      flex-shrink: 0;
+      transition: transform 0.25s ease;
+    }
+    #sidebar.collapsed #sidebar-toggle { transform: rotate(180deg); }
+
+    /* Hide the label text (but not the button) when collapsed */
+    #sidebar.collapsed .sidebar-title { display: none; }
 
     .blink { animation: blinker 1s linear infinite; }
     @keyframes blinker { 50% { opacity: 0; } }
@@ -111,6 +140,8 @@
       font-family: 'JetBrains Mono', monospace;
       font-size: 11px;
       color: var(--text-secondary);
+      /* Prevents log text from wrapping weirdly during transition */
+      min-width: calc(22vw - 30px);
     }
 
     .log-entry { margin-bottom: 3px; word-wrap: break-word; border-left: 2px solid transparent; padding-left: 5px; }
@@ -327,11 +358,11 @@
   <div id="reconnect-banner">⚠ WebSocket disconnected – reconnecting…</div>
 
   <div id="main-layout">
-    <!-- Log Sidebar -->
+    <!-- Log Sidebar (collapsible) -->
     <div id="sidebar">
-      <div class="sidebar-header">
-        <span>> SYSTEM LOGS</span>
-        <span class="blink">_</span>
+      <div class="sidebar-header" onclick="toggleSidebar()">
+        <span class="sidebar-title">> SYSTEM LOGS <span class="blink">_</span></span>
+        <button id="sidebar-toggle" title="Toggle logs">◀</button>
       </div>
       <div id="log-container">
         <div class="log-entry sys">[SYSTEM] Interface ready…</div>
@@ -472,6 +503,12 @@
       const arrow = document.getElementById(arrowId);
       const collapsed = body.classList.toggle('collapsed');
       arrow.textContent = collapsed ? '▼' : '▲';
+    }
+
+    // ======================== Sidebar Toggle ========================
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      sidebar.classList.toggle('collapsed');
     }
 
     // ======================== WebSocket with Exponential Backoff ========================
