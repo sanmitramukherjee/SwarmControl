@@ -185,9 +185,10 @@
     /* ---- Right Sidebar ---- */
     #right-sidebar {
       position: absolute; top: 15px; right: 15px;
-      width: 280px; display: flex; flex-direction: column; gap: 12px;
+      width: 285px; display: flex; flex-direction: column; gap: 12px;
       pointer-events: none;
-      max-height: calc(100vh - 30px);
+      /* Use 100% of #main-view height minus top/bottom margins */
+      max-height: calc(100% - 30px);
       overflow-y: auto;
     }
 
@@ -205,11 +206,18 @@
     .panel-title {
       font-size: 11px; color: var(--text-secondary);
       margin-bottom: 10px; text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: 1px; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+      user-select: none;
     }
+    .panel-title:hover { color: var(--text-primary); }
+    .panel-title .toggle-arrow { font-size: 9px; }
+
+    .panel-body { }
+    .panel-body.collapsed { display: none; }
 
     #tracker-view {
-      width: 100%; height: 180px;
+      width: 100%; height: 160px;
       background: #000; border-radius: 4px;
       border: 1px solid var(--accent);
       position: relative; overflow: hidden;
@@ -269,6 +277,28 @@
       font-family: 'JetBrains Mono', monospace;
     }
     .info-row span { color: var(--accent); }
+
+    /* ---- Collision Warning Banner ---- */
+    #collision-banner {
+      display: none;
+      position: absolute;
+      top: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(120, 20, 20, 0.95);
+      border: 1px solid var(--danger);
+      border-radius: 6px;
+      padding: 6px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #ffaaaa;
+      z-index: 200;
+      white-space: nowrap;
+      pointer-events: none;
+      animation: pulse-border 1s ease-in-out infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { border-color: var(--danger); }
+      50%       { border-color: #ff9999; }
+    }
   </style>
 </head>
 
@@ -330,76 +360,87 @@
         <div id="drone-list"></div>
       </div>
 
-      <!-- Right sidebar -->
-      <div id="right-sidebar">
+      <!-- Collision warning banner (sits inside #main-view) -->
+      <div id="collision-banner">⚠ COLLISION PROXIMITY ALERT</div>
 
-        <!-- Drone Tracker -->
-        <div class="panel">
-          <div class="panel-title">Drone Tracker</div>
-          <div id="tracker-view">
-            <div id="tracker-label">NO TARGET</div>
-          </div>
-          <div style="font-size:10px;color:var(--text-secondary);">Click a drone to track.</div>
-        </div>
+      <!-- Right sidebar: Swarm Control first, then collapsible Tracker -->
+      <div id="right-sidebar">
 
         <!-- Swarm Control -->
         <div class="panel">
-          <div class="panel-title">Swarm Control</div>
-
-          <!-- Leader selector -->
-          <div class="ctrl-group">
-            <label class="ctrl-label">LEADER DRONE</label>
-            <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)">
-              <option value="-1">AUTO (lowest sysid)</option>
-            </select>
+          <div class="panel-title" onclick="togglePanel('swarm-body','swarm-arrow')">
+            Swarm Control <span class="toggle-arrow" id="swarm-arrow">▲</span>
           </div>
+          <div class="panel-body" id="swarm-body">
 
-          <!-- Formation type -->
-          <div class="ctrl-row ctrl-group">
-            <div>
-              <label class="ctrl-label">FORMATION</label>
-              <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
-                <option value="off">OFF</option>
-                <option value="V">V-SHAPE</option>
-                <option value="line">LINE</option>
+            <!-- Leader selector -->
+            <div class="ctrl-group">
+              <label class="ctrl-label">LEADER DRONE</label>
+              <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)">
+                <option value="-1">AUTO (lowest sysid)</option>
               </select>
             </div>
-            <div>
-              <label class="ctrl-label">SPACING (m) <span id="spacing-val">10</span></label>
-              <input type="range" id="spacing-slider" min="3" max="50" value="10"
-                     oninput="document.getElementById('spacing-val').textContent=this.value">
+
+            <!-- Formation type + spacing -->
+            <div class="ctrl-row ctrl-group">
+              <div>
+                <label class="ctrl-label">FORMATION</label>
+                <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
+                  <option value="off">OFF</option>
+                  <option value="V">V-SHAPE</option>
+                  <option value="line">LINE</option>
+                </select>
+              </div>
+              <div>
+                <label class="ctrl-label">SPACING (m) <span id="spacing-val">10</span></label>
+                <input type="range" id="spacing-slider" min="3" max="50" value="10"
+                       oninput="document.getElementById('spacing-val').textContent=this.value">
+              </div>
+            </div>
+
+            <!-- Leader position display -->
+            <div class="info-row">
+              LEADER POS: <span id="leader-pos">WAITING…</span>
+            </div>
+
+            <!-- Target coordinates -->
+            <div class="ctrl-row ctrl-group">
+              <div>
+                <label class="ctrl-label">LAT</label>
+                <input type="number" id="cmd-lat" class="ctrl-input" step="0.000001">
+              </div>
+              <div>
+                <label class="ctrl-label">LON</label>
+                <input type="number" id="cmd-lon" class="ctrl-input" step="0.000001">
+              </div>
+            </div>
+            <div class="ctrl-group">
+              <label class="ctrl-label">ALT AGL (m)</label>
+              <input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1">
+            </div>
+
+            <!-- Command buttons -->
+            <div class="btn-grid">
+              <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
+              <button class="swarm-btn" onclick="swarmCmd('takeoff')" style="border-color:var(--accent);color:var(--accent)">TAKEOFF</button>
+              <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
+              <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
+              <button class="swarm-btn" onclick="swarmCmd('land')" style="border-color:var(--accent);color:var(--accent)">LAND</button>
+              <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')">DISARM (EMERGENCY)</button>
             </div>
           </div>
+        </div>
 
-          <!-- Leader position display -->
-          <div class="info-row" id="leader-pos-row">
-            LEADER POS: <span id="leader-pos">WAITING…</span>
+        <!-- Drone Tracker (collapsible, collapsed by default) -->
+        <div class="panel">
+          <div class="panel-title" onclick="togglePanel('tracker-body','tracker-arrow')">
+            Drone Tracker <span class="toggle-arrow" id="tracker-arrow">▼</span>
           </div>
-
-          <!-- Target coordinates -->
-          <div class="ctrl-row ctrl-group">
-            <div>
-              <label class="ctrl-label">LAT</label>
-              <input type="number" id="cmd-lat" class="ctrl-input" step="0.000001">
+          <div class="panel-body collapsed" id="tracker-body">
+            <div id="tracker-view">
+              <div id="tracker-label">NO TARGET</div>
             </div>
-            <div>
-              <label class="ctrl-label">LON</label>
-              <input type="number" id="cmd-lon" class="ctrl-input" step="0.000001">
-            </div>
-          </div>
-          <div class="ctrl-group">
-            <label class="ctrl-label">ALT AGL (m)</label>
-            <input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1">
-          </div>
-
-          <!-- Command buttons -->
-          <div class="btn-grid">
-            <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
-            <button class="swarm-btn" onclick="swarmCmd('takeoff')" style="border-color:var(--accent);color:var(--accent)">TAKEOFF</button>
-            <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
-            <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
-            <button class="swarm-btn" onclick="swarmCmd('land')" style="border-color:var(--accent);color:var(--accent)">LAND</button>
-            <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')">DISARM (EMERGENCY)</button>
+            <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">Click a drone to track.</div>
           </div>
         </div>
 
@@ -417,6 +458,16 @@
     const WS_MAX_DELAY             = 30000;  // ms – cap on exponential backoff
     const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
     const DRONE_LIST_UPDATE_MS     = 200;    // throttle drone-list DOM updates (ms)
+    // Horizontal distance (metres) in 3D scene that triggers the collision warning
+    const COLLISION_WARN_M         = 5.0;
+
+    // ======================== Panel Toggle ========================
+    function togglePanel(bodyId, arrowId) {
+      const body = document.getElementById(bodyId);
+      const arrow = document.getElementById(arrowId);
+      const collapsed = body.classList.toggle('collapsed');
+      arrow.textContent = collapsed ? '▼' : '▲';
+    }
 
     // ======================== WebSocket with Exponential Backoff ========================
     let ws = null;
@@ -647,6 +698,9 @@
         // Prop spin
         Object.values(drones).forEach(d => { if (d.props) d.props.rotation.y += 0.4; });
 
+        // ---- Collision proximity check (runs every frame, cheap pairwise) ----
+        checkCollisionProximity();
+
         renderer.render(scene, camera);
 
         // Tracker
@@ -654,7 +708,10 @@
           const pos = drones[selectedDroneId].mesh.position.clone();
           trackerCamera.position.copy(pos).add(new THREE.Vector3(8, 8, 8));
           trackerCamera.lookAt(pos);
-          trackerRenderer.render(scene, trackerCamera);
+          // Only render tracker if its panel is expanded
+          if (!document.getElementById('tracker-body').classList.contains('collapsed')) {
+            trackerRenderer.render(scene, trackerCamera);
+          }
         }
       }
       animate();
@@ -667,6 +724,61 @@
     }
 
     init3D();
+
+    // ======================== Collision Proximity Check ========================
+    const collisionBanner = document.getElementById('collision-banner');
+    let collisionLogThrottle = 0;
+
+    function checkCollisionProximity() {
+      const ids = Object.keys(drones);
+      let anyClose = false;
+
+      for (let i = 0; i < ids.length; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const pi = drones[ids[i]].mesh.position;
+          const pj = drones[ids[j]].mesh.position;
+          const dist = pi.distanceTo(pj);
+
+          if (dist < COLLISION_WARN_M) {
+            anyClose = true;
+            // Tint both drones red
+            setDroneTint(ids[i], 0xff2222);
+            setDroneTint(ids[j], 0xff2222);
+
+            // Log at most once every 5 s
+            const now = Date.now();
+            if (now - collisionLogThrottle > 5000) {
+              collisionLogThrottle = now;
+              log(`⚠ COLLISION: Drone #${ids[i]} & #${ids[j]} are ${dist.toFixed(1)}m apart!`, 'error');
+            }
+          } else {
+            setDroneTint(ids[i], 0x00d4ff);
+            setDroneTint(ids[j], 0x00d4ff);
+          }
+        }
+      }
+
+      collisionBanner.style.display = anyClose ? 'block' : 'none';
+    }
+
+    // Cache body materials per drone for fast tinting
+    const _droneTintCache = {};
+    function setDroneTint(sysid, color) {
+      if (!drones[sysid]) return;
+      if (!_droneTintCache[sysid]) {
+        // Find the body mesh (first child that is a Mesh with MeshPhongMaterial)
+        drones[sysid].mesh.children.forEach(child => {
+          if (child.isMesh && child.material && child.material.isMeshPhongMaterial) {
+            _droneTintCache[sysid] = child.material;
+          }
+        });
+      }
+      const mat = _droneTintCache[sysid];
+      if (mat && mat.color.getHex() !== color) {
+        mat.color.setHex(color);
+        mat.emissive.setHex(color === 0xff2222 ? 0x550000 : 0x0044aa);
+      }
+    }
 
     // ======================== Drone 3D Objects ========================
     function createDrone(sysid) {

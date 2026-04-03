@@ -24,6 +24,16 @@ HEARTBEAT_WAIT_REAL_S    = 2.0   # Seconds to wait for heartbeats after serial c
 METERS_PER_DEG_LAT       = 110574.0   # Approximate metres per degree of latitude
 METERS_PER_DEG_LON_EQ    = 111320.0   # Approximate metres per degree of longitude at equator
 
+# ---- Collision Avoidance ----
+# Minimum 3-D separation (metres) below which a collision warning is issued and
+# vertical stagger is applied automatically.
+COLLISION_WARN_M     = 5.0
+# Vertical altitude increment (metres) added per drone index when flying to the
+# same lat/lon without a formation pattern, preventing mid-air convergence.
+COLLISION_ALT_STEP_M = 2.5
+# Seconds between each consecutive drone takeoff when staggering launch.
+TAKEOFF_STAGGER_S    = 1.5
+
 # ======================== CLI Argument Parsing ========================
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -64,6 +74,41 @@ def _meters_to_deg(lat_deg):
     """Return (m_per_deg_lat, m_per_deg_lon) at the given latitude."""
     lat_rad = math.radians(lat_deg)
     return METERS_PER_DEG_LAT, METERS_PER_DEG_LON_EQ * math.cos(lat_rad)
+
+
+def _haversine_m(lat1, lon1, lat2, lon2):
+    """Horizontal distance in metres between two lat/lon points."""
+    R = 6_371_000
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def check_formation_separation(positions_with_alt, min_sep_m=COLLISION_WARN_M):
+    """
+    Check pairwise 3-D separation between target positions.
+
+    Args:
+        positions_with_alt: list of (lat, lon, alt) tuples.
+        min_sep_m:          Minimum acceptable 3-D separation in metres.
+
+    Returns:
+        List of (i, j, dist_3d_m) for every pair that is closer than min_sep_m.
+    """
+    warnings = []
+    for i in range(len(positions_with_alt)):
+        for j in range(i + 1, len(positions_with_alt)):
+            lat1, lon1, alt1 = positions_with_alt[i]
+            lat2, lon2, alt2 = positions_with_alt[j]
+            h = _haversine_m(lat1, lon1, lat2, lon2)
+            v = abs(alt1 - alt2)
+            dist_3d = math.sqrt(h * h + v * v)
+            if dist_3d < min_sep_m:
+                warnings.append((i, j, dist_3d))
+    return warnings
 
 
 def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
@@ -784,8 +829,13 @@ def perform_swarm_command(cmd_data, drone_handlers):
 
     elif cmd == "takeoff":
         alt = float(cmd_data.get("alt", 5))
-        for h in active_handlers:
-            threading.Thread(target=h.takeoff, args=(alt,), daemon=True).start()
+        # Stagger takeoff timing to prevent all drones lifting at once and colliding
+        def _staggered_takeoff():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(TAKEOFF_STAGGER_S)
+                threading.Thread(target=h.takeoff, args=(alt,), daemon=True).start()
+        threading.Thread(target=_staggered_takeoff, daemon=True).start()
 
     elif cmd == "rtl":
         for h in active_handlers:
@@ -806,14 +856,7 @@ def perform_swarm_command(cmd_data, drone_handlers):
                 return
 
             if formation and len(active_handlers) > 1:
-                # Leader flies to target
-                threading.Thread(
-                    target=leader.fly_to_gps, args=(lat, lon, alt), daemon=True
-                ).start()
-
                 followers = [h for h in active_handlers if h is not leader]
-
-                # Use leader's current heading (yaw) for formation orientation
                 heading = leader.yaw
 
                 offsets = calculate_formation_offsets(
@@ -822,14 +865,48 @@ def perform_swarm_command(cmd_data, drone_handlers):
                     pattern=pattern,
                     spacing_m=spacing_m,
                 )
-                for h, (f_lat, f_lon) in zip(followers, offsets):
+
+                # Build (lat, lon, alt) for every drone and validate separation
+                targets = [(lat, lon, alt)] + [(f_lat, f_lon, alt) for f_lat, f_lon in offsets]
+                conflicts = check_formation_separation(targets)
+
+                if conflicts:
+                    # Apply vertical stagger: each conflicting pair needs altitude separation
+                    print(f"[Swarm] Collision warning – {len(conflicts)} pair(s) too close. "
+                          f"Applying vertical stagger of {COLLISION_ALT_STEP_M}m.")
+                    try:
+                        from web_server import broadcast_log
+                        broadcast_log(
+                            f"[COLLISION WARNING] {len(conflicts)} drone pair(s) within "
+                            f"{COLLISION_WARN_M}m – vertical stagger applied."
+                        )
+                    except ImportError:
+                        pass
+                    targets = [
+                        (t_lat, t_lon, t_alt + i * COLLISION_ALT_STEP_M)
+                        for i, (t_lat, t_lon, t_alt) in enumerate(targets)
+                    ]
+
+                # Issue commands
+                leader_target = targets[0]
+                threading.Thread(
+                    target=leader.fly_to_gps, args=leader_target, daemon=True
+                ).start()
+                for h, target in zip(followers, targets[1:]):
                     threading.Thread(
-                        target=h.fly_to_gps, args=(f_lat, f_lon, alt), daemon=True
+                        target=h.fly_to_gps, args=target, daemon=True
                     ).start()
+
             else:
-                for h in active_handlers:
+                # No formation — send drones to same lat/lon but stagger altitudes
+                # to prevent mid-air convergence on the same point.
+                if len(active_handlers) > 1:
+                    print(f"[Swarm] No formation – staggering altitudes "
+                          f"by {COLLISION_ALT_STEP_M}m per drone.")
+                for i, h in enumerate(active_handlers):
+                    stagger_alt = alt + i * COLLISION_ALT_STEP_M
                     threading.Thread(
-                        target=h.fly_to_gps, args=(lat, lon, alt), daemon=True
+                        target=h.fly_to_gps, args=(lat, lon, stagger_alt), daemon=True
                     ).start()
 
         except Exception as e:
