@@ -2,752 +2,821 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drone Swarm Command Center</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwarmControl – Drone Swarm Command Center</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
 
-    <!-- Import fonts -->
-    <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap"
-        rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0f1115;
+      --bg-panel: #1a1d24;
+      --accent: #00d4ff;
+      --text-primary: #ffffff;
+      --text-secondary: #8b9bb4;
+      --border: #2f3640;
+      --success: #00ff9d;
+      --danger: #ff4757;
+      --warning: #ffc107;
+    }
 
-    <style>
-        :root {
-            --bg-dark: #0f1115;
-            --bg-panel: #1a1d24;
-            --accent: #00d4ff;
-            --text-primary: #ffffff;
-            --text-secondary: #8b9bb4;
-            --border: #2f3640;
-            --success: #00ff9d;
-            --danger: #ff4757;
-        }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-primary);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-dark);
-            color: var(--text-primary);
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-        }
+    /* ---- Top Status Bar ---- */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 18px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
 
-        /* --- Sidebar (Logs) 25% --- */
-        #sidebar {
-            width: 25%;
-            background-color: var(--bg-panel);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            z-index: 10;
-        }
+    #status-bar .sb-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-secondary);
+    }
 
-        .sidebar-header {
-            padding: 15px;
-            border-bottom: 1px solid var(--border);
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 700;
-            color: var(--accent);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
+    #status-bar .sb-item .val {
+      color: var(--accent);
+      font-weight: 700;
+    }
 
-        .blink {
-            animation: blinker 1s linear infinite;
-        }
+    #status-bar .sb-item.good .val { color: var(--success); }
+    #status-bar .sb-item.warn .val { color: var(--warning); }
+    #status-bar .sb-item.danger .val { color: var(--danger); }
 
-        @keyframes blinker {
-            50% {
-                opacity: 0;
-            }
-        }
+    #reconnect-banner {
+      display: none;
+      background: #7a1c1c;
+      color: #ffaaaa;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 5px 18px;
+      flex-shrink: 0;
+    }
 
-        #log-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            color: var(--text-secondary);
-            padding-bottom: 20px;
-        }
+    /* ---- Main layout ---- */
+    #main-layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
 
-        .log-entry {
-            margin-bottom: 4px;
-            word-wrap: break-word;
-            border-left: 2px solid transparent;
-            padding-left: 5px;
-        }
+    /* ---- Sidebar (Logs) 22% ---- */
+    #sidebar {
+      width: 22%;
+      background-color: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+    }
 
-        .log-entry.error {
-            color: var(--danger);
-            border-left-color: var(--danger);
-        }
+    .sidebar-header {
+      padding: 12px 15px;
+      border-bottom: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
 
-        .log-entry.info {
-            color: var(--text-primary);
-        }
+    .blink { animation: blinker 1s linear infinite; }
+    @keyframes blinker { 50% { opacity: 0; } }
 
-        .log-entry.sys {
-            color: var(--accent);
-        }
+    #log-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
 
-        #log-container::-webkit-scrollbar {
-            width: 5px;
-        }
+    .log-entry { margin-bottom: 3px; word-wrap: break-word; border-left: 2px solid transparent; padding-left: 5px; }
+    .log-entry.error { color: var(--danger); border-left-color: var(--danger); }
+    .log-entry.info  { color: var(--text-primary); }
+    .log-entry.sys   { color: var(--accent); }
+    #log-container::-webkit-scrollbar { width: 4px; }
+    #log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-        #log-container::-webkit-scrollbar-thumb {
-            background: var(--border);
-            border-radius: 3px;
-        }
+    /* ---- 3D View ---- */
+    #main-view {
+      flex: 1;
+      position: relative;
+      background: linear-gradient(to bottom, #050505, #12151a);
+    }
 
-        /* --- Main Content (3D View) 75% --- */
-        #main-view {
-            flex: 1;
-            position: relative;
-            background: linear-gradient(to bottom, #050505, #12151a);
-        }
+    #canvas-container { width: 100%; height: 100%; }
 
-        #canvas-container {
-            width: 100%;
-            height: 100%;
-        }
+    #loading {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      background: rgba(0,0,0,0.8);
+      padding: 20px; border-radius: 5px;
+      z-index: 100;
+    }
 
-        /* Overlay UI */
-        .overlay {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(15, 17, 21, 0.9);
-            border: 1px solid var(--border);
-            padding: 15px;
-            border-radius: 8px;
-            backdrop-filter: blur(5px);
-            pointer-events: auto;
-            /* Allow clicking */
-            max-height: 80vh;
-            display: flex;
-            flex-direction: column;
-            width: 250px;
-            transition: width 0.3s;
-        }
+    /* ---- Overlay (drone list) ---- */
+    .overlay {
+      position: absolute; top: 15px; left: 15px;
+      background: rgba(15,17,21,0.93);
+      border: 1px solid var(--border);
+      padding: 14px; border-radius: 8px;
+      backdrop-filter: blur(5px);
+      pointer-events: auto;
+      max-height: 80vh;
+      display: flex; flex-direction: column;
+      width: 240px;
+    }
 
-        .overlay h2 {
-            font-size: 14px;
-            color: var(--text-secondary);
-            margin-bottom: 10px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+    .overlay h2 {
+      font-size: 12px; color: var(--text-secondary);
+      margin-bottom: 8px; text-transform: uppercase;
+      letter-spacing: 1px; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .overlay h2:hover { color: var(--text-primary); }
 
-        .overlay h2:hover {
-            color: var(--text-primary);
-        }
+    .stat-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin-bottom: 8px; }
+    .stat-item .label { font-size: 9px; color: var(--text-secondary); }
+    .stat-item .value { font-size: 16px; font-family: 'JetBrains Mono', monospace; color: var(--accent); }
 
-        .stat-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-bottom: 10px;
-        }
+    #drone-list { display: none; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; overflow-y: auto; flex: 1; }
+    #drone-list.open { display: block; }
 
-        .stat-item .label {
-            font-size: 10px;
-            color: var(--text-secondary);
-        }
+    .drone-row {
+      margin-bottom: 6px; padding: 7px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 4px; font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer; transition: background 0.2s;
+    }
+    .drone-row:hover { background: rgba(255,255,255,0.07); }
+    .drone-row.selected { background: rgba(0,212,255,0.18); border-left: 3px solid var(--accent); }
+    .drone-row.leader-row { border-left: 3px solid var(--warning); }
+    .drone-row.selected.leader-row { background: rgba(255,193,7,0.15); }
+    .drone-row .header { color: var(--accent); font-weight: bold; margin-bottom: 3px; }
+    .drone-row.leader-row .header { color: var(--warning); }
+    .drone-row .details { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; color: var(--text-secondary); }
 
-        .stat-item .value {
-            font-size: 18px;
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--accent);
-        }
+    /* ---- Right Sidebar ---- */
+    #right-sidebar {
+      position: absolute; top: 15px; right: 15px;
+      width: 280px; display: flex; flex-direction: column; gap: 12px;
+      pointer-events: none;
+      max-height: calc(100vh - 30px);
+      overflow-y: auto;
+    }
 
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-family: 'JetBrains Mono', monospace;
-            color: var(--accent);
-            background: rgba(0, 0, 0, 0.8);
-            padding: 20px;
-            border-radius: 5px;
-            z-index: 100;
-        }
+    #right-sidebar::-webkit-scrollbar { width: 4px; }
+    #right-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-        /* Drone List Dropdown */
-        #drone-list {
-            display: none;
-            /* Hidden by default */
-            margin-top: 10px;
-            border-top: 1px solid var(--border);
-            padding-top: 10px;
-            overflow-y: auto;
-            flex: 1;
-        }
+    .panel {
+      background: rgba(15,17,21,0.93);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 13px;
+      backdrop-filter: blur(5px);
+      pointer-events: auto;
+    }
 
-        #drone-list.open {
-            display: block;
-        }
+    .panel-title {
+      font-size: 11px; color: var(--text-secondary);
+      margin-bottom: 10px; text-transform: uppercase;
+      letter-spacing: 1px;
+    }
 
-        .drone-row {
-            margin-bottom: 8px;
-            padding: 8px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 4px;
-            font-size: 11px;
-            font-family: 'JetBrains Mono', monospace;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
+    #tracker-view {
+      width: 100%; height: 180px;
+      background: #000; border-radius: 4px;
+      border: 1px solid var(--accent);
+      position: relative; overflow: hidden;
+      margin-bottom: 5px;
+    }
 
-        .drone-row:hover {
-            background: rgba(255, 255, 255, 0.05);
-        }
+    #tracker-label {
+      position: absolute; top: 5px; left: 5px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; color: var(--accent);
+      background: rgba(0,0,0,0.6);
+      padding: 2px 5px; z-index: 10;
+    }
 
-        .drone-row.selected {
-            background: rgba(0, 212, 255, 0.2);
-            border-left: 3px solid var(--accent);
-        }
+    /* ---- Form controls ---- */
+    .ctrl-group { margin-bottom: 8px; }
+    .ctrl-label { font-size: 9px; color: var(--text-secondary); display: block; margin-bottom: 2px; }
+    .ctrl-input {
+      width: 100%;
+      background: #000; border: 1px solid var(--border);
+      color: #fff; padding: 4px 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; border-radius: 3px;
+    }
+    .ctrl-input:focus { outline: none; border-color: var(--accent); }
+    select.ctrl-input { cursor: pointer; }
 
-        .drone-row .header {
-            color: var(--accent);
-            font-weight: bold;
-            margin-bottom: 4px;
-        }
+    .ctrl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
-        .drone-row .details {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 4px;
-            color: var(--text-secondary);
-        }
+    .swarm-btn {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 6px; font-size: 10px;
+      cursor: pointer; border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace;
+      transition: all 0.15s;
+    }
+    .swarm-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .swarm-btn.success  { border-color: var(--success); color: var(--success); }
+    .swarm-btn.success:hover { background: rgba(0,255,157,0.1); }
+    .swarm-btn.accent   { background: var(--accent); border: none; color: #000; font-weight: bold; }
+    .swarm-btn.accent:hover { background: #00b8da; }
+    .swarm-btn.danger   { border-color: var(--danger); color: var(--danger); }
+    .swarm-btn.danger:hover { background: rgba(255,71,87,0.1); }
 
-        /* Right Sidebar (Tracker) */
-        #right-sidebar {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 300px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            pointer-events: none;
-        }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+    .btn-grid .span2 { grid-column: span 2; }
 
-        .panel {
-            background: rgba(15, 17, 21, 0.9);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px;
-            backdrop-filter: blur(5px);
-            pointer-events: auto;
-        }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
 
-        #tracker-view {
-            width: 100%;
-            height: 200px;
-            background: #000;
-            border-radius: 4px;
-            border: 1px solid var(--accent);
-            position: relative;
-            overflow: hidden;
-            margin-bottom: 5px;
-        }
-
-        #tracker-label {
-            position: absolute;
-            top: 5px;
-            left: 5px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 10px;
-            color: var(--accent);
-            background: rgba(0, 0, 0, 0.6);
-            padding: 2px 5px;
-            z-index: 10;
-        }
-    </style>
+    .info-row {
+      font-size: 9px; color: var(--text-secondary);
+      padding: 4px 6px;
+      background: rgba(0,0,0,0.3);
+      border-radius: 3px; margin-bottom: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .info-row span { color: var(--accent); }
+  </style>
 </head>
 
 <body>
 
+  <!-- Top Status Bar -->
+  <div id="status-bar">
+    <div class="sb-item" id="sb-mode">
+      <span>MODE</span><span class="val" id="sb-mode-val">—</span>
+    </div>
+    <div class="sb-item" id="sb-drones">
+      <span>DRONES</span><span class="val" id="sb-drones-val">0</span>
+    </div>
+    <div class="sb-item">
+      <span>LEADER</span><span class="val" id="sb-leader-val">—</span>
+    </div>
+    <div class="sb-item">
+      <span>FORMATION</span><span class="val" id="sb-formation-val">OFF</span>
+    </div>
+    <div class="sb-item">
+      <span>WS</span><span class="val" id="sb-ws-val">CONNECTING…</span>
+    </div>
+  </div>
+
+  <!-- Reconnect Banner -->
+  <div id="reconnect-banner">⚠ WebSocket disconnected – reconnecting…</div>
+
+  <div id="main-layout">
+    <!-- Log Sidebar -->
     <div id="sidebar">
-        <div class="sidebar-header">
-            <span>> SYSTEM LOGS</span>
-            <span class="blink">_</span>
-        </div>
-        <div id="log-container">
-            <div class="log-entry sys">[SYSTEM] Interface Ready...</div>
-            <div class="log-entry sys">[SYSTEM] Connecting to WebSocket...</div>
-        </div>
+      <div class="sidebar-header">
+        <span>> SYSTEM LOGS</span>
+        <span class="blink">_</span>
+      </div>
+      <div id="log-container">
+        <div class="log-entry sys">[SYSTEM] Interface ready…</div>
+        <div class="log-entry sys">[SYSTEM] Connecting to WebSocket…</div>
+      </div>
     </div>
 
+    <!-- 3D Scene -->
     <div id="main-view">
-        <div id="canvas-container"></div>
+      <div id="canvas-container"></div>
+      <div id="loading">INITIALIZING 3D ENVIRONMENT…</div>
 
-        <div id="loading">INITIALIZING 3D ENVIRONMENT...</div>
-
-        <div class="overlay">
-            <h2 onclick="toggleDropdown()">
-                Swarm Status
-                <span id="arrow">▼</span>
-            </h2>
-            <div class="stat-grid">
-                <div class="stat-item">
-                    <div class="label">ACTIVE DRONES</div>
-                    <div class="value" id="active-count">0</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">AVG ALTITUDE</div>
-                    <div class="value" id="avg-alt">0.0m</div>
-                </div>
-            </div>
-
-            <div id="drone-list">
-            </div>
+      <!-- Left overlay: Swarm status + drone list -->
+      <div class="overlay">
+        <h2 onclick="toggleDropdown()">Swarm Status <span id="arrow">▼</span></h2>
+        <div class="stat-grid">
+          <div class="stat-item">
+            <div class="label">ACTIVE DRONES</div>
+            <div class="value" id="active-count">0</div>
+          </div>
+          <div class="stat-item">
+            <div class="label">AVG ALT (AGL)</div>
+            <div class="value" id="avg-alt">0.0m</div>
+          </div>
         </div>
-        <div id="right-sidebar">
-            <div class="panel" style="margin-bottom: 30px;">
-                <h2
-                    style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;">
-                    Drone Tracker</h2>
-                <div id="tracker-view">
-                    <div id="tracker-label">NO TARGET</div>
-                </div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin-top: 5px;">
-                    Click a drone in the list to track.
-                </div>
-            </div>
+        <div id="drone-list"></div>
+      </div>
 
-            <div class="panel">
-                <h2
-                    style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;">
-                    Swarm Control
-                </h2>
+      <!-- Right sidebar -->
+      <div id="right-sidebar">
 
-                <div style="margin-bottom: 10px;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" id="formation-mode" style="margin-right: 8px;">
-                        <span style="font-size: 11px; color: var(--accent);">ENABLE FORMATION (V-SHAPE)</span>
-                    </label>
-                </div>
-
-                <div style="margin-bottom: 10px; padding: 5px; background: rgba(0,0,0,0.3); border-radius: 4px;">
-                    <span
-                        style="font-size: 9px; color: var(--text-secondary); display: block; margin-bottom: 2px;">MASTER
-                        POS (DRONE 1)</span>
-                    <span id="master-pos"
-                        style="font-size: 10px; font-family: 'JetBrains Mono'; color: var(--accent);">WAITING...</span>
-                </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 5px;">
-                    <div style="display: flex; flex-direction: column;">
-                        <span style="font-size: 9px; color: var(--text-secondary);">LAT</span>
-                        <input type="number" id="cmd-lat" step="0.000001"
-                            style="background:#000; border:1px solid var(--border); color:#fff; padding:4px; font-family:'JetBrains Mono'; font-size:10px;">
-                    </div>
-                    <div style="display: flex; flex-direction: column;">
-                        <span style="font-size: 9px; color: var(--text-secondary);">LON</span>
-                        <input type="number" id="cmd-lon" step="0.000001"
-                            style="background:#000; border:1px solid var(--border); color:#fff; padding:4px; font-family:'JetBrains Mono'; font-size:10px;">
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; margin-bottom: 10px;">
-                    <span style="font-size: 9px; color: var(--text-secondary);">ALT (M)</span>
-                    <input type="number" id="cmd-alt" value="10" step="1"
-                        style="background:#000; border:1px solid var(--border); color:#fff; padding:4px; font-family:'JetBrains Mono'; font-size:10px;">
-                </div>
-
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px;">
-                    <button onclick="swarmCmd('arm')"
-                        style="background:var(--bg-panel); border:1px solid var(--success); color:var(--success); padding:6px; font-size:10px; cursor:pointer;">ARM</button>
-                    <button onclick="swarmCmd('takeoff')"
-                        style="background:var(--bg-panel); border:1px solid var(--accent); color:var(--accent); padding:6px; font-size:10px; cursor:pointer;">TAKEOFF</button>
-                    <button onclick="swarmCmd('fly_to')"
-                        style="background:var(--accent); border:none; color:#000; padding:6px; font-size:10px; font-weight:bold; cursor:pointer; grid-column: span 2;">FLY
-                        TO TARGET</button>
-                    <button onclick="swarmCmd('rtl')"
-                        style="background:var(--bg-panel); border:1px solid var(--text-secondary); color:var(--text-secondary); padding:6px; font-size:10px; cursor:pointer;">RTL</button>
-                    <button onclick="swarmCmd('land')"
-                        style="background:var(--bg-panel); border:1px solid var(--accent); color:var(--accent); padding:6px; font-size:10px; cursor:pointer;">LAND</button>
-                    <button onclick="swarmCmd('disarm')"
-                        style="background:var(--bg-panel); border:1px solid var(--danger); color:var(--danger); padding:6px; font-size:10px; cursor:pointer; grid-column: span 2;">DISARM
-                        (EMERGENCY)</button>
-                </div>
-            </div>
+        <!-- Drone Tracker -->
+        <div class="panel">
+          <div class="panel-title">Drone Tracker</div>
+          <div id="tracker-view">
+            <div id="tracker-label">NO TARGET</div>
+          </div>
+          <div style="font-size:10px;color:var(--text-secondary);">Click a drone to track.</div>
         </div>
+
+        <!-- Swarm Control -->
+        <div class="panel">
+          <div class="panel-title">Swarm Control</div>
+
+          <!-- Leader selector -->
+          <div class="ctrl-group">
+            <label class="ctrl-label">LEADER DRONE</label>
+            <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)">
+              <option value="-1">AUTO (lowest sysid)</option>
+            </select>
+          </div>
+
+          <!-- Formation type -->
+          <div class="ctrl-row ctrl-group">
+            <div>
+              <label class="ctrl-label">FORMATION</label>
+              <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
+                <option value="off">OFF</option>
+                <option value="V">V-SHAPE</option>
+                <option value="line">LINE</option>
+              </select>
+            </div>
+            <div>
+              <label class="ctrl-label">SPACING (m) <span id="spacing-val">10</span></label>
+              <input type="range" id="spacing-slider" min="3" max="50" value="10"
+                     oninput="document.getElementById('spacing-val').textContent=this.value">
+            </div>
+          </div>
+
+          <!-- Leader position display -->
+          <div class="info-row" id="leader-pos-row">
+            LEADER POS: <span id="leader-pos">WAITING…</span>
+          </div>
+
+          <!-- Target coordinates -->
+          <div class="ctrl-row ctrl-group">
+            <div>
+              <label class="ctrl-label">LAT</label>
+              <input type="number" id="cmd-lat" class="ctrl-input" step="0.000001">
+            </div>
+            <div>
+              <label class="ctrl-label">LON</label>
+              <input type="number" id="cmd-lon" class="ctrl-input" step="0.000001">
+            </div>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">ALT AGL (m)</label>
+            <input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1">
+          </div>
+
+          <!-- Command buttons -->
+          <div class="btn-grid">
+            <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
+            <button class="swarm-btn" onclick="swarmCmd('takeoff')" style="border-color:var(--accent);color:var(--accent)">TAKEOFF</button>
+            <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
+            <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
+            <button class="swarm-btn" onclick="swarmCmd('land')" style="border-color:var(--accent);color:var(--accent)">LAND</button>
+            <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')">DISARM (EMERGENCY)</button>
+          </div>
+        </div>
+
+      </div>
     </div>
+  </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script>
-        const ws = new WebSocket('ws://localhost:8001');
-        const logContainer = document.getElementById('log-container');
-        const activeCountEl = document.getElementById('active-count');
-        const avgAltEl = document.getElementById('avg-alt');
-        const droneListEl = document.getElementById('drone-list');
-        const arrowEl = document.getElementById('arrow');
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
-        const cmdLatEl = document.getElementById('cmd-lat');
-        const cmdLonEl = document.getElementById('cmd-lon');
-        const cmdAltEl = document.getElementById('cmd-alt');
-        const formationEl = document.getElementById('formation-mode');
+  <script>
+    // ======================== WebSocket with Exponential Backoff ========================
+    const WS_URL = 'ws://localhost:8001';
+    let ws = null;
+    let wsRetryDelay = 1000;
+    const WS_MAX_DELAY = 30000;
+    let wsConnected = false;
 
-        const drones = {};
-        let scene, camera, renderer, controls;
-        let isDropdownOpen = false;
+    function connectWS() {
+      ws = new WebSocket(WS_URL);
 
-        // Tracker State
-        let selectedDroneId = null;
-        let trackerRenderer, trackerCamera;
+      ws.onopen = () => {
+        wsConnected = true;
+        wsRetryDelay = 1000;
+        document.getElementById('sb-ws-val').textContent = 'CONNECTED';
+        document.getElementById('reconnect-banner').style.display = 'none';
+        document.getElementById('loading').style.display = 'none';
+        log('WebSocket connected.', 'sys');
+      };
 
-        function toggleDropdown() {
-            isDropdownOpen = !isDropdownOpen;
-            if (isDropdownOpen) {
-                droneListEl.classList.add('open');
-                arrowEl.textContent = '▲';
-            } else {
-                droneListEl.classList.remove('open');
-                arrowEl.textContent = '▼';
-            }
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'log') {
+            log(msg.content, 'info');
+          } else if (msg.type === 'telemetry') {
+            pendingTelemetry = Object.assign(pendingTelemetry || {}, msg.data);
+          } else if (msg.type === 'status') {
+            applyStatus(msg.data);
+          }
+        } catch (e) {
+          console.error('[WS] Parse error:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        wsConnected = false;
+        document.getElementById('sb-ws-val').textContent = 'DISCONNECTED';
+        document.getElementById('reconnect-banner').style.display = 'block';
+        log(`WebSocket closed. Retrying in ${(wsRetryDelay/1000).toFixed(1)}s…`, 'error');
+        setTimeout(() => {
+          wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_DELAY);
+          connectWS();
+        }, wsRetryDelay);
+      };
+
+      ws.onerror = () => {
+        document.getElementById('sb-ws-val').textContent = 'ERROR';
+        ws.close();
+      };
+    }
+
+    connectWS();
+
+    // ======================== Telemetry Batching ========================
+    // pendingTelemetry accumulates updates between animation frames
+    let pendingTelemetry = null;
+
+    // ======================== Log ========================
+    const logContainer = document.getElementById('log-container');
+    function log(text, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `log-entry ${type}`;
+      div.textContent = `> ${text}`;
+      logContainer.appendChild(div);
+      if (logContainer.children.length > 150) logContainer.removeChild(logContainer.firstChild);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    // ======================== Status Sync ========================
+    let currentLeaderSysid = -1;  // -1 = auto
+
+    function applyStatus(data) {
+      if (data.mode !== undefined) {
+        document.getElementById('sb-mode-val').textContent = data.mode;
+      }
+      if (data.leader !== undefined) {
+        currentLeaderSysid = parseInt(data.leader);
+        const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
+        document.getElementById('sb-leader-val').textContent = label;
+        syncLeaderSelect();
+      }
+      if (data.drone_count !== undefined) {
+        document.getElementById('sb-drones-val').textContent = data.drone_count;
+      }
+    }
+
+    // ======================== Leader Control ========================
+    function onLeaderChange(val) {
+      currentLeaderSysid = parseInt(val);
+      const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
+      document.getElementById('sb-leader-val').textContent = label;
+      wsSend({ type: 'set_leader', sysid: currentLeaderSysid });
+      log(`Leader set to ${label}`, 'sys');
+    }
+
+    function syncLeaderSelect() {
+      const sel = document.getElementById('leader-select');
+      sel.value = String(currentLeaderSysid);
+    }
+
+    function updateLeaderSelect() {
+      const sel = document.getElementById('leader-select');
+      const existing = new Set([...sel.options].map(o => o.value));
+      const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
+      sortedIds.forEach(id => {
+        if (!existing.has(id)) {
+          const opt = document.createElement('option');
+          opt.value = id;
+          opt.textContent = `DRONE #${id}`;
+          sel.appendChild(opt);
+        }
+      });
+      syncLeaderSelect();
+    }
+
+    // ======================== Formation Control ========================
+    function onFormationTypeChange(val) {
+      const isOn = val !== 'off';
+      document.getElementById('sb-formation-val').textContent = isOn ? val : 'OFF';
+    }
+
+    function getFormationState() {
+      const fType = document.getElementById('formation-type').value;
+      return {
+        formation: fType !== 'off',
+        pattern: fType === 'off' ? 'V' : fType,
+        spacing_m: parseFloat(document.getElementById('spacing-slider').value),
+      };
+    }
+
+    // ======================== Swarm Commands ========================
+    function wsSend(payload) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      } else {
+        log('WebSocket not connected – command dropped.', 'error');
+      }
+    }
+
+    function swarmCmd(cmd) {
+      const fState = getFormationState();
+      const payload = {
+        type: 'swarm_command',
+        cmd,
+        ...fState,
+        lat: parseFloat(document.getElementById('cmd-lat').value) || 0,
+        lon: parseFloat(document.getElementById('cmd-lon').value) || 0,
+        alt: parseFloat(document.getElementById('cmd-alt').value) || 5,
+      };
+      wsSend(payload);
+      log(`Sent: ${cmd} | formation=${payload.formation} pattern=${payload.pattern} spacing=${payload.spacing_m}m`, 'sys');
+    }
+
+    // ======================== 3D Scene ========================
+    const drones = {};
+    let scene, camera, renderer, controls;
+    let trackerRenderer, trackerCamera;
+    let selectedDroneId = null;
+    let isDropdownOpen = false;
+
+    function toggleDropdown() {
+      isDropdownOpen = !isDropdownOpen;
+      document.getElementById('drone-list').classList.toggle('open', isDropdownOpen);
+      document.getElementById('arrow').textContent = isDropdownOpen ? '▲' : '▼';
+    }
+
+    window.selectDrone = function (id) {
+      selectedDroneId = id;
+      document.getElementById('tracker-label').textContent = `TRACKING: #${id}`;
+      renderDroneList();
+      if (drones[id] && drones[id].telemetry) {
+        document.getElementById('cmd-lat').value = drones[id].telemetry.lat.toFixed(6);
+        document.getElementById('cmd-lon').value = drones[id].telemetry.lon.toFixed(6);
+      }
+    };
+
+    function init3D() {
+      const container = document.getElementById('canvas-container');
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x050505);
+      scene.fog = new THREE.Fog(0x050505, 100, 5000);
+
+      camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 50000);
+      camera.position.set(0, 50, 80);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      // Tracker
+      const trackerEl = document.getElementById('tracker-view');
+      trackerRenderer = new THREE.WebGLRenderer({ antialias: true });
+      trackerRenderer.setSize(trackerEl.clientWidth, trackerEl.clientHeight);
+      trackerEl.appendChild(trackerRenderer.domElement);
+      trackerCamera = new THREE.PerspectiveCamera(50, trackerEl.clientWidth / trackerEl.clientHeight, 0.1, 2000);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.maxDistance = 5000;
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+      const dir = new THREE.DirectionalLight(0xffffff, 1);
+      dir.position.set(50, 100, 50);
+      scene.add(dir);
+
+      scene.add(new THREE.GridHelper(1000, 100, 0x222222, 0x111111));
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(200000, 200000),
+        new THREE.MeshBasicMaterial({ color: 0x060608, side: THREE.DoubleSide })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.5;
+      scene.add(ground);
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+
+        // ---- Flush pending telemetry ----
+        if (pendingTelemetry) {
+          updateSwarm(pendingTelemetry);
+          pendingTelemetry = null;
         }
 
-        // Global selection handler
-        window.selectDrone = function (id) {
-            selectedDroneId = id;
-            document.getElementById('tracker-label').textContent = `TRACKING: #${id}`;
-            renderDroneList();
+        // Prop spin
+        Object.values(drones).forEach(d => { if (d.props) d.props.rotation.y += 0.4; });
 
-            // Auto fill inputs
-            if (drones[id] && drones[id].telemetry) {
-                cmdLatEl.value = drones[id].telemetry.lat.toFixed(6);
-                cmdLonEl.value = drones[id].telemetry.lon.toFixed(6);
-            }
+        renderer.render(scene, camera);
+
+        // Tracker
+        if (selectedDroneId && drones[selectedDroneId]) {
+          const pos = drones[selectedDroneId].mesh.position.clone();
+          trackerCamera.position.copy(pos).add(new THREE.Vector3(8, 8, 8));
+          trackerCamera.lookAt(pos);
+          trackerRenderer.render(scene, trackerCamera);
+        }
+      }
+      animate();
+
+      window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+      });
+    }
+
+    init3D();
+
+    // ======================== Drone 3D Objects ========================
+    function createDrone(sysid) {
+      const group = new THREE.Group();
+
+      const mat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, emissive: 0x0044aa, emissiveIntensity: 0.5 });
+      group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 1), mat));
+
+      const armMat = new THREE.MeshBasicMaterial({ color: 0x555555 });
+      const armGeom = new THREE.BoxGeometry(3, 0.1, 0.2);
+      const arm1 = new THREE.Mesh(armGeom, armMat); arm1.rotation.y = Math.PI / 4;
+      const arm2 = new THREE.Mesh(armGeom, armMat); arm2.rotation.y = -Math.PI / 4;
+      group.add(arm1); group.add(arm2);
+
+      const propGroup = new THREE.Group();
+      const propGeom = new THREE.CylinderGeometry(0.8, 0.8, 0.05, 8);
+      const propMat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.8 });
+      [{ x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }].forEach(p => {
+        const prop = new THREE.Mesh(propGeom, propMat);
+        prop.position.set(p.x, 0.2, p.z);
+        propGroup.add(prop);
+      });
+      group.add(propGroup);
+
+      // Label
+      const lCanvas = document.createElement('canvas');
+      lCanvas.width = 64; lCanvas.height = 32;
+      const ctx = lCanvas.getContext('2d');
+      ctx.fillStyle = '#00d4ff';
+      ctx.font = 'bold 20px monospace';
+      ctx.fillText(`#${sysid}`, 4, 24);
+      const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lCanvas) })
+      );
+      sprite.position.y = 2.5;
+      sprite.scale.set(4, 2, 1);
+      group.add(sprite);
+
+      group.position.set(0, 0, 0);
+      scene.add(group);
+      return { mesh: group, props: propGroup };
+    }
+
+    // ======================== Telemetry Processing ========================
+    window.homeRef = null;
+    let lastListUpdate = 0;
+
+    function updateSwarm(data) {
+      // Set home reference from first valid fix
+      if (!window.homeRef) {
+        const firstId = Object.keys(data)[0];
+        if (firstId && Math.abs(data[firstId].lat) > 0.1) {
+          window.homeRef = { lat: data[firstId].lat, lon: data[firstId].lon };
+          log(`Home ref: ${window.homeRef.lat.toFixed(6)}, ${window.homeRef.lon.toFixed(6)}`, 'sys');
+        }
+      }
+
+      let newDroneAdded = false;
+
+      for (const [sysid, t] of Object.entries(data)) {
+        if (!drones[sysid]) {
+          drones[sysid] = createDrone(sysid);
+          log(`New drone detected: #${sysid}`, 'sys');
+          if (!selectedDroneId) selectDrone(sysid);
+          newDroneAdded = true;
         }
 
-        function swarmCmd(cmd) {
-            const payload = {
-                type: "swarm_command",
-                cmd: cmd,
-                formation: formationEl.checked,
-                lat: parseFloat(cmdLatEl.value) || 0,
-                lon: parseFloat(cmdLonEl.value) || 0,
-                alt: parseFloat(cmdAltEl.value) || 5
-            };
-            ws.send(JSON.stringify(payload));
-            log(`Sent Command: ${cmd} (Formation: ${payload.formation})`, "sys");
+        drones[sysid].telemetry = t;
+
+        if (window.homeRef) {
+          const latDiff = t.lat - window.homeRef.lat;
+          const lonDiff = t.lon - window.homeRef.lon;
+          const cosLat = Math.cos(window.homeRef.lat * Math.PI / 180);
+
+          // Use MSL altitude for 3D positioning, offset by home MSL so Y=0 at ground
+          const homeAltMsl = (t.home_alt !== undefined) ? t.home_alt : 0;
+          const x = lonDiff * 111320 * cosLat;
+          const z = -latDiff * 110574;
+          const y = (t.alt_msl !== undefined && t.alt_msl !== 0)
+            ? t.alt_msl - homeAltMsl
+            : t.alt;
+
+          drones[sysid].mesh.position.set(x, Math.max(0, y), z);
+          drones[sysid].mesh.rotation.x = t.pitch * (Math.PI / 180);
+          drones[sysid].mesh.rotation.z = -t.roll * (Math.PI / 180);
+          drones[sysid].mesh.rotation.y = -t.yaw * (Math.PI / 180);
         }
+      }
 
-        ws.onopen = () => {
-            log("Connected to Flight Controller.", "sys");
-            document.getElementById('loading').style.display = 'none';
-        };
+      // Update stats
+      const allDrones = Object.values(drones);
+      const activeCount = allDrones.length;
+      document.getElementById('active-count').textContent = activeCount;
+      document.getElementById('sb-drones-val').textContent = activeCount;
 
-        ws.onmessage = (event) => {
-            try {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'log') {
-                    log(msg.content, "info");
-                } else if (msg.type === 'telemetry') {
-                    updateSwarm(msg.data);
-                }
-            } catch (e) {
-                console.error(e);
-            }
-        };
+      let totalAlt = 0;
+      allDrones.forEach(d => { if (d.telemetry) totalAlt += d.telemetry.alt; });
+      document.getElementById('avg-alt').textContent =
+        activeCount > 0 ? (totalAlt / activeCount).toFixed(1) + 'm' : '0.0m';
 
-        function log(text, type) {
-            const div = document.createElement('div');
-            div.className = `log-entry ${type}`;
-            div.textContent = `> ${text}`;
-            logContainer.appendChild(div);
-            // Limit log history to 100 items to prevent lag
-            if (logContainer.children.length > 100) {
-                logContainer.removeChild(logContainer.firstChild);
-            }
-            logContainer.scrollTop = logContainer.scrollHeight;
+      // Leader position display
+      const leaderSysid = currentLeaderSysid === -1
+        ? (Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b))[0] || null)
+        : String(currentLeaderSysid);
+
+      const leaderPosEl = document.getElementById('leader-pos');
+      if (leaderSysid && drones[leaderSysid] && drones[leaderSysid].telemetry) {
+        const lt = drones[leaderSysid].telemetry;
+        leaderPosEl.textContent =
+          `L:${lt.lat.toFixed(5)} LN:${lt.lon.toFixed(5)} A:${lt.alt.toFixed(1)}m`;
+      } else {
+        leaderPosEl.textContent = 'WAITING…';
+      }
+
+      if (newDroneAdded) updateLeaderSelect();
+
+      if (isDropdownOpen) {
+        const now = Date.now();
+        if (now - lastListUpdate > 200) {
+          renderDroneList();
+          lastListUpdate = now;
         }
+      }
+    }
 
-        // --- 3D Scene Setup ---
-        function init3D() {
-            const container = document.getElementById('canvas-container');
+    function renderDroneList() {
+      const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
+      const leaderSysid = currentLeaderSysid === -1
+        ? (sortedIds[0] || null)
+        : String(currentLeaderSysid);
 
-            // Scene
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            scene.fog = new THREE.Fog(0x050505, 50, 2000); // Increased fog distance
-
-            // Camera
-            camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 50000); // Increased Far clip
-            camera.position.set(0, 50, 80);
-
-            // Renderer
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            // Enable logarithmic depth buffer for large distances if needed, but standard is usually fine for <100km
-            container.appendChild(renderer.domElement);
-
-            // --- Tracker Setup ---
-            const trackerContainer = document.getElementById('tracker-view');
-            trackerRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-            trackerRenderer.setSize(trackerContainer.clientWidth, trackerContainer.clientHeight);
-            trackerContainer.appendChild(trackerRenderer.domElement);
-
-            trackerCamera = new THREE.PerspectiveCamera(50, trackerContainer.clientWidth / trackerContainer.clientHeight, 0.1, 2000);
-
-            // Controls
-            controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-            controls.maxDistance = 2000; // Allow zooming out further
-
-            // Lights
-            const ambiLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambiLight);
-
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-            dirLight.position.set(50, 100, 50);
-            scene.add(dirLight);
-
-            // Grid (Larger)
-            // We create a large grid, and maybe a smaller detailed one near center
-            const gridHelper = new THREE.GridHelper(500, 50, 0x333333, 0x111111);
-            scene.add(gridHelper);
-
-            // Huge Ground Plane for long distance flight
-            const geometry = new THREE.PlaneGeometry(200000, 200000); // 200km x 200km
-            const material = new THREE.MeshBasicMaterial({ color: 0x080808, side: THREE.DoubleSide });
-            const plane = new THREE.Mesh(geometry, material);
-            plane.rotation.x = -Math.PI / 2;
-            plane.position.y = -0.5;
-            scene.add(plane);
-
-            // Animation Loop
-            function animate() {
-                requestAnimationFrame(animate);
-                controls.update();
-
-                // Animate Drones (Props)
-                Object.values(drones).forEach(d => {
-                    if (d.props) d.props.rotation.y += 0.5;
-                });
-
-                // Render Main View
-                renderer.render(scene, camera);
-
-                // Render Tracker View
-                if (selectedDroneId && drones[selectedDroneId]) {
-                    const d = drones[selectedDroneId];
-                    // Chase Cam Logic
-                    const targetPos = d.mesh.position.clone();
-                    // Offset: Behind and Up relative to world for now (Isometric chase)
-                    // If we want tail-chase we need drone rotation, but visual rotation is Euler...
-                    // Let's do a dynamic isometric look for now
-                    const camOffset = new THREE.Vector3(8, 8, 8);
-                    trackerCamera.position.copy(targetPos).add(camOffset);
-                    trackerCamera.lookAt(targetPos);
-                    trackerRenderer.render(scene, trackerCamera);
-                }
-            }
-            animate();
-
-            // Resize handle
-            window.addEventListener('resize', () => {
-                camera.aspect = container.clientWidth / container.clientHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(container.clientWidth, container.clientHeight);
-            });
+      let html = '';
+      sortedIds.forEach(id => {
+        const t = drones[id].telemetry;
+        const selected = id === selectedDroneId ? 'selected' : '';
+        const isLeader = id === leaderSysid ? 'leader-row' : '';
+        const leaderBadge = id === leaderSysid ? ' ★LEADER' : '';
+        if (t) {
+          html += `
+            <div class="drone-row ${selected} ${isLeader}"
+                 onclick="event.stopPropagation();selectDrone('${id}')">
+              <div class="header">DRONE #${id}${leaderBadge}</div>
+              <div class="details">
+                <span>Lat: ${t.lat.toFixed(5)}</span>
+                <span>Lon: ${t.lon.toFixed(5)}</span>
+                <span>AGL: ${t.alt.toFixed(1)}m</span>
+                <span>MSL: ${(t.alt_msl||0).toFixed(1)}m</span>
+                <span>HSpd: ${t.h_speed.toFixed(1)}</span>
+                <span>VSpd: ${t.v_speed.toFixed(1)}</span>
+              </div>
+            </div>`;
         }
-
-        init3D();
-
-        // --- Drone Management ---
-        function createDrone(sysid) {
-            const group = new THREE.Group();
-
-            // Drone Body (X shape)
-            const mat = new THREE.MeshPhongMaterial({ color: 0x00d4ff, emissive: 0x0044aa, emissiveIntensity: 0.5 });
-            const geom = new THREE.BoxGeometry(1, 0.2, 1);
-            const body = new THREE.Mesh(geom, mat);
-            group.add(body);
-
-            // Arms
-            const armGeom = new THREE.BoxGeometry(3, 0.1, 0.2);
-            const arm1 = new THREE.Mesh(armGeom, new THREE.MeshBasicMaterial({ color: 0x555555 }));
-            const arm2 = new THREE.Mesh(armGeom, new THREE.MeshBasicMaterial({ color: 0x555555 }));
-            arm1.rotation.y = Math.PI / 4;
-            arm2.rotation.y = -Math.PI / 4;
-            group.add(arm1);
-            group.add(arm2);
-
-            // Props
-            const propGroup = new THREE.Group();
-            const propGeom = new THREE.CylinderGeometry(0.8, 0.8, 0.05, 8);
-            const propMat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.8 });
-
-            const positions = [
-                { x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }
-            ];
-
-            positions.forEach(pos => {
-                const prop = new THREE.Mesh(propGeom, propMat);
-                prop.position.set(pos.x, 0.2, pos.z);
-                propGroup.add(prop);
-            });
-            group.add(propGroup);
-
-            // Label
-            const canvas = document.createElement('canvas');
-            canvas.width = 64; canvas.height = 32;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#00d4ff';
-            ctx.font = 'bold 20px monospace';
-            ctx.fillText(`#${sysid}`, 4, 24);
-            const spriteMap = new THREE.CanvasTexture(canvas);
-            const spriteMat = new THREE.SpriteMaterial({ map: spriteMap });
-            const sprite = new THREE.Sprite(spriteMat);
-            sprite.position.y = 2;
-            sprite.scale.set(4, 2, 1);
-            group.add(sprite);
-
-            // Initial Pos
-            group.position.set(0, 0, 0);
-            scene.add(group);
-
-            return {
-                mesh: group,
-                props: propGroup,
-                targetPos: new THREE.Vector3()
-            };
-        }
-
-        function updateSwarm(data) {
-            // data is dict {sysid: {lat, lon, alt, ...}}
-
-            // We need a home reference for Lat/Lon -> X/Z
-            // Simple approach: First active drone sets the 0,0
-            // Fix: Ensure we don't set home to 0,0 if GPS is invalid (0,0)
-            if (!window.homeRef) {
-                const firstId = Object.keys(data)[0];
-                if (firstId && Math.abs(data[firstId].lat) > 0.1) {
-                    window.homeRef = { lat: data[firstId].lat, lon: data[firstId].lon };
-                    log(`Home Reference set to ${window.homeRef.lat.toFixed(6)}, ${window.homeRef.lon.toFixed(6)}`, "sys");
-                }
-            }
-
-            for (const [sysid, telemetry] of Object.entries(data)) {
-                if (!drones[sysid]) {
-                    drones[sysid] = createDrone(sysid);
-                    log(`New Drone Detected: #${sysid}`, "sys");
-
-                    // Auto-select first drone if none selected
-                    if (!selectedDroneId) selectDrone(sysid);
-                }
-
-                const drone = drones[sysid];
-                drone.telemetry = telemetry; // Store for stats
-
-                // Convert LatHome/LonHome to X/Z meters (approx)
-                // Only move if we have a home ref, otherwise stay at 0,0
-                if (window.homeRef) {
-                    const latDiff = telemetry.lat - window.homeRef.lat;
-                    const lonDiff = telemetry.lon - window.homeRef.lon;
-
-                    // 1 deg lat ~ 111km, 1 deg lon ~ 111km * cos(lat)
-                    const x = lonDiff * 111320 * Math.cos(window.homeRef.lat * Math.PI / 180);
-                    const z = -latDiff * 110574; // -z is North in Three.js usu
-
-                    // Filter crazy alt spikes (optional)
-                    // if (telemetry.alt < -50) telemetry.alt = 0; 
-
-                    const y = telemetry.alt;
-
-                    // Interpolation (simple lerp for smoothness)
-                    drone.mesh.position.set(x, y, z);
-
-                    // Attitude
-                    drone.mesh.rotation.x = telemetry.pitch * (Math.PI / 180);
-                    drone.mesh.rotation.z = -telemetry.roll * (Math.PI / 180);
-                    drone.mesh.rotation.y = -telemetry.yaw * (Math.PI / 180);
-                }
-            }
-
-            // Update Stats based on GLOBAL drone list, not just active packet
-            const allDrones = Object.values(drones);
-            const activeCount = allDrones.length;
-
-            let totalAlt = 0;
-            allDrones.forEach(d => {
-                if (d.telemetry) totalAlt += d.telemetry.alt;
-            });
-
-            activeCountEl.textContent = activeCount;
-            avgAltEl.textContent = activeCount > 0 ? (totalAlt / activeCount).toFixed(1) + "m" : "0.0m";
-
-            // Update Master Pos (Drone 1)
-            const masterPosEl = document.getElementById('master-pos');
-            if (masterPosEl) {
-                if (drones["1"] && drones["1"].telemetry) {
-                    const t = drones["1"].telemetry;
-                    masterPosEl.textContent = `L:${t.lat.toFixed(6)} LN:${t.lon.toFixed(6)} A:${t.alt.toFixed(1)}m`;
-                } else {
-                    masterPosEl.textContent = "WAITING FOR DRONE #1...";
-                }
-            }
-
-            // Update List if Open (Throttled)
-            if (isDropdownOpen) {
-                renderDroneList();
-            }
-        }
-
-        let lastListUpdate = 0;
-        function renderDroneList() {
-            const now = Date.now();
-            if (now - lastListUpdate < 200) return; // Limit to 5Hz updates
-            lastListUpdate = now;
-
-            let html = '';
-
-            // Sort by sysid (keys of drones dict)
-            const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
-
-            sortedIds.forEach(id => {
-                const t = drones[id].telemetry;
-                const isSelected = (id === selectedDroneId) ? 'selected' : '';
-                if (t) {
-                    html += `
-                        <div class="drone-row ${isSelected}" onclick="event.stopPropagation(); selectDrone('${id}')">
-                            <div class="header">DRONE #${id}</div>
-                            <div class="details">
-                                <span>Lat: ${t.lat.toFixed(6)}</span>
-                                <span>Lon: ${t.lon.toFixed(6)}</span>
-                                <span>Alt: ${t.alt.toFixed(1)}m</span>
-                                <div></div>
-                                <span>HSpd: ${t.h_speed.toFixed(1)}</span>
-                                <span>VSpd: ${t.v_speed.toFixed(1)}</span>
-                            </div>
-                        </div>
-                    `;
-                }
-            });
-
-            droneListEl.innerHTML = html;
-        }
-
-    </script>
+      });
+      document.getElementById('drone-list').innerHTML = html;
+    }
+  </script>
 </body>
-
 </html>
