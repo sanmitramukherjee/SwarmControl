@@ -23,6 +23,7 @@ HEARTBEAT_WARN_S         = 3.0   # Seconds without heartbeat before GUI status t
 HEARTBEAT_WAIT_REAL_S    = 2.0   # Seconds to wait for heartbeats after serial connect
 METERS_PER_DEG_LAT       = 110574.0   # Approximate metres per degree of latitude
 METERS_PER_DEG_LON_EQ    = 111320.0   # Approximate metres per degree of longitude at equator
+WEB_DASH_URL             = "http://localhost:8000/index.html"
 
 # ---- Collision Avoidance ----
 # Minimum 3-D separation (metres) below which a collision warning is issued and
@@ -67,6 +68,13 @@ def parse_args():
     parser.add_argument("--no-browser", action="store_true",
                         help="Do not auto-open the web dashboard in the default browser")
     return parser.parse_args()
+
+
+def _open_dashboard():
+    """Open the web dashboard with a cache-busting query string."""
+    import webbrowser
+    url = f"{WEB_DASH_URL}?v={int(time.time())}"
+    webbrowser.open(url)
 
 
 # ======================== Formation Engine ========================
@@ -975,8 +983,7 @@ def main():
         btn_frame.pack(side="right", padx=10)
 
         def _launch_map():
-            import webbrowser
-            webbrowser.open("http://localhost:8000")
+            _open_dashboard()
 
         tk.Button(
             btn_frame, text="LAUNCH 3D MAP", command=_launch_map,
@@ -1034,8 +1041,7 @@ def main():
     # Optionally open browser
     if not args.no_browser:
         try:
-            import webbrowser
-            webbrowser.open("http://localhost:8000")
+            _open_dashboard()
         except Exception:
             pass
 
@@ -1045,7 +1051,7 @@ def main():
         except KeyboardInterrupt:
             pass
     else:
-        print("[SwarmControl] Running in headless mode. Web dashboard: http://localhost:8000")
+        print(f"[SwarmControl] Running in headless mode. Web dashboard: {WEB_DASH_URL}")
         print("Press Ctrl+C to quit.")
         _shutdown = threading.Event()
         try:

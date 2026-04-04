@@ -83,6 +83,7 @@
     #sidebar {
       width: 22%;
       min-width: 22%;
+      flex: 0 0 22%;
       background-color: var(--bg-panel);
       border-right: 1px solid var(--border);
       display: flex;
@@ -95,6 +96,7 @@
     #sidebar.collapsed {
       width: 36px;
       min-width: 36px;
+      flex-basis: 36px;
     }
 
     .sidebar-header {
@@ -140,8 +142,8 @@
       font-family: 'JetBrains Mono', monospace;
       font-size: 11px;
       color: var(--text-secondary);
-      /* Prevents log text from wrapping weirdly during transition */
-      min-width: calc(22vw - 30px);
+      /* Allow sidebar to shrink cleanly when collapsed */
+      min-width: 0;
     }
 
     .log-entry { margin-bottom: 3px; word-wrap: break-word; border-left: 2px solid transparent; padding-left: 5px; }
@@ -360,7 +362,7 @@
   <div id="main-layout">
     <!-- Log Sidebar (collapsible) -->
     <div id="sidebar">
-      <div class="sidebar-header" onclick="toggleSidebar()">
+      <div class="sidebar-header">
         <span class="sidebar-title">> SYSTEM LOGS <span class="blink">_</span></span>
         <button id="sidebar-toggle" title="Toggle logs">◀</button>
       </div>
@@ -506,9 +508,16 @@
     }
 
     // ======================== Sidebar Toggle ========================
-    function toggleSidebar() {
+    function toggleSidebar(evt) {
+      if (evt) evt.stopPropagation();
       const sidebar = document.getElementById('sidebar');
       sidebar.classList.toggle('collapsed');
+    }
+
+    // Bind sidebar toggle to any click inside the sidebar
+    const _sidebarEl = document.getElementById('sidebar');
+    if (_sidebarEl) {
+      _sidebarEl.addEventListener('click', toggleSidebar);
     }
 
     // ======================== WebSocket with Exponential Backoff ========================
@@ -765,8 +774,6 @@
       });
     }
 
-    init3D();
-
     // ======================== Collision Proximity Check ========================
     const collisionBanner = document.getElementById('collision-banner');
     let collisionLogThrottle = 0;
@@ -809,6 +816,8 @@
 
       collisionBanner.style.display = violators.size > 0 ? 'block' : 'none';
     }
+
+    init3D();
 
     // Cache body materials per drone for fast tinting
     const _droneTintCache = {};
@@ -990,3 +999,7 @@
   </script>
 </body>
 </html>
+
+
+
+
