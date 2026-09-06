@@ -35,7 +35,7 @@ Supports both real & SITL (Software in the Loop) drones alike.
 
 ---
 
-## 📈 Scalability Configuration
+##  Scalability Configuration
 
 To scale the system up to 100 drones, optimize your network configuration in `server/config.json`:
 * Increase the MAVLink message streaming rate parameters (`SRx_POSITION`, `SRx_EXTRA1`).
