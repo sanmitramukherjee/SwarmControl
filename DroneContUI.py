@@ -1,426 +1,218 @@
+"""
+SwarmControl — Multi-Drone Ground Control Station
+Usage:
+  SITL:        python DroneContUI.py --sitl --drones 5762 5772 5782
+  Real:        python DroneContUI.py --real --drones COM3:1 COM3:2
+  + GUI:       python DroneContUI.py --sitl --drones 5762 5772 --control
+  No browser:  python DroneContUI.py --sitl --drones 5762 --no-browser
+"""
+
+import argparse
 import threading
-import tkinter as tk
-from tkinter import font as tkfont
-from pymavlink import mavutil
 import math
 import time
+import sys
+
+from pymavlink import mavutil
 from commands import arm_drone, takeoff, land, rtl, fly_to_gps, disarm_drone
 
-# ------------------- Color Scheme -------------------
-COLORS = {
-    'bg_dark': '#1a1a1a',
-    'bg_panel': '#2a2a2a',
-    'bg_header': '#333333',
-    'border': '#4a4a4a',
-    'text_primary': '#ffffff',
-    'text_secondary': '#b0b0b0',
-    'accent_blue': '#2196f3',
-    'accent_cyan': '#00d4ff',
-    'status_good': '#4caf50',
-    'status_warning': '#ffc107',
-    'status_critical': '#f44336',
-    'btn_arm': '#616161',
-    'btn_takeoff': '#4caf50',
-    'btn_flyto': '#ffc107',
-    'btn_rtl': '#ff9800',
-    'btn_land': '#2196f3'
-}
+# ======================== Configuration Constants ========================
+DATA_STREAM_RATE_HZ      = 4     # MAVLink data stream request rate (Hz)
+HEARTBEAT_TIMEOUT_S      = 10.0  # Seconds without heartbeat before watchdog reconnects
+HEARTBEAT_WARN_S         = 3.0   # Seconds without heartbeat before GUI status turns red
+HEARTBEAT_WAIT_REAL_S    = 2.0   # Seconds to wait for heartbeats after serial connect
+METERS_PER_DEG_LAT       = 110574.0   # Approximate metres per degree of latitude
+METERS_PER_DEG_LON_EQ    = 111320.0   # Approximate metres per degree of longitude at equator
+WEB_DASH_URL             = "http://localhost:8000/index.html"
 
-# ------------------- Drone Handler -------------------
-class DroneHandler:
-    def __init__(self, sysid, connection, container):
-        self.sysid = sysid
-        self.connection = connection
-        self.gps_label = None
-        self.speed_label = None
-        self.status_label = None
-        self.status_light = None
-        
-        # Attitude data
-        self.pitch = 0
-        self.roll = 0
-        self.yaw = 0
-        
-        # Last heartbeat time for status monitoring
-        self.last_heartbeat = 0
-        
-        # Current altitude for control loops
-        self.current_alt = 0.0
+# ---- Collision Avoidance ----
+# Minimum 3-D separation (metres) below which a collision warning is issued and
+# vertical stagger is applied automatically.
+COLLISION_WARN_M     = 1.5
+# Vertical altitude increment (metres) added per drone index when flying to the
+# same lat/lon without a formation pattern, preventing mid-air convergence.
+COLLISION_ALT_STEP_M = 2.5
+# Seconds between each consecutive drone takeoff when staggering launch.
+TAKEOFF_STAGGER_S    = 1.5
+# Inactivity timeout (seconds) before hovering drones RTL
+INACTIVITY_RTL_TIMEOUT_S = 30.0
 
-        # Title for the frame
-        title = f"DRONE {self.sysid}" if self.sysid != "N/A" else "DRONE (DISCONNECTED)"
-        
-        # Create Frame with dark theme
-        self.frame = tk.LabelFrame(
-            container, 
-            text=title, 
-            padx=4, 
-            pady=4, 
-            font=("Consolas", 9, "bold"),
-            bg=COLORS['bg_panel'],
-            fg=COLORS['text_primary'],
-            bd=1,
-            relief="flat",
-            highlightbackground=COLORS['border'],
-            highlightthickness=1
-        )
-        self.frame.pack(side="left", padx=3, pady=3, fill="both", expand=True)
+# ======================== CLI Argument Parsing ========================
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="SwarmControl – Multi-Drone Ground Control Station",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  SITL:      python DroneContUI.py --sitl --drones 5762 5772 5782\n"
+            "  Real:      python DroneContUI.py --real --drones COM3:1 COM3:2\n"
+            "  + GUI:     python DroneContUI.py --sitl --drones 5762 --control\n"
+        ),
+    )
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--sitl", action="store_true",
+                      help="Connect to SITL drones via TCP localhost")
+    mode.add_argument("--real", action="store_true",
+                      help="Connect to real drones via serial/mesh (COM:SYSID pairs)")
 
-        # Header with Status Light
-        header_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
-        header_frame.pack(fill="x", pady=(0, 3))
-        
-        # Status Light (compact)
-        self.status_light = tk.Canvas(
-            header_frame, 
-            width=20, 
-            height=20, 
-            bg=COLORS['bg_panel'],
-            highlightthickness=0
-        )
-        self.status_light.pack(side="right", padx=3)
-        self.set_status_light("red")
+    parser.add_argument(
+        "--drones", nargs="+", required=True,
+        metavar="PORT_OR_COM:SYSID",
+        help=(
+            "SITL: TCP port numbers (e.g. 5762 5772). "
+            "Real: COM_PORT:SYSID pairs (e.g. COM3:1 COM3:2)"
+        ),
+    )
+    parser.add_argument("--control", action="store_true",
+                        help="Launch Tkinter GUI control station alongside the web dashboard")
+    parser.add_argument("--baud", type=int, default=57600,
+                        help="Baud rate for real drone serial connections (default: 57600)")
+    parser.add_argument("--no-browser", action="store_true",
+                        help="Do not auto-open the web dashboard in the default browser")
+    return parser.parse_args()
 
-        # Container for PFD and Dashboard side by side
-        display_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
-        display_frame.pack(fill="x", pady=3)
 
-        # Primary Flight Display (compact)
-        self.canvas = tk.Canvas(
-            display_frame, 
-            width=100, 
-            height=100, 
-            bg='#0a0a0a',
-            highlightthickness=1,
-            highlightbackground=COLORS['border']
-        )
-        self.canvas.pack(side="left", padx=(0, 6))
+def _open_dashboard():
+    """Open the web dashboard with a cache-busting query string."""
+    import webbrowser
+    url = f"{WEB_DASH_URL}?v={int(time.time())}"
+    webbrowser.open(url)
 
-        # Dashboard (GPS, Speed, Status) with better styling
-        dashboard_frame = tk.Frame(display_frame, bg=COLORS['bg_panel'])
-        dashboard_frame.pack(side="left", fill="both", expand=True)
-        
-        # Telemetry labels with monospace font
-        telemetry_font = ("Consolas", 8)
-        
-        self.gps_label = tk.Label(
-            dashboard_frame, 
-            text="Lat: --, Lon: --, Alt: --", 
-            font=telemetry_font,
-            bg=COLORS['bg_panel'],
-            fg=COLORS['accent_cyan'],
-            anchor="w"
-        )
-        self.gps_label.pack(fill="x", pady=1)
-        
-        self.speed_label = tk.Label(
-            dashboard_frame, 
-            text="H.Spd: --, V.Spd: -- m/s", 
-            font=telemetry_font,
-            bg=COLORS['bg_panel'],
-            fg=COLORS['accent_cyan'],
-            anchor="w"
-        )
-        self.speed_label.pack(fill="x", pady=1)
-        
-        self.status_label = tk.Label(
-            dashboard_frame, 
-            text="Status: --", 
-            font=telemetry_font,
-            bg=COLORS['bg_panel'],
-            fg=COLORS['text_secondary'],
-            anchor="w"
-        )
-        self.status_label.pack(fill="x", pady=1)
 
-        # Separator
-        separator = tk.Frame(self.frame, height=1, bg=COLORS['border'])
-        separator.pack(fill="x", pady=3)
+# ======================== Formation Engine ========================
+def _meters_to_deg(lat_deg):
+    """Return (m_per_deg_lat, m_per_deg_lon) at the given latitude."""
+    lat_rad = math.radians(lat_deg)
+    return METERS_PER_DEG_LAT, METERS_PER_DEG_LON_EQ * math.cos(lat_rad)
 
-        # Inputs with better styling
-        inputs = tk.Frame(self.frame, bg=COLORS['bg_panel'])
-        inputs.pack(fill="x", pady=2)
-        
-        input_font = ("Consolas", 8)
-        label_font = ("Consolas", 8, "bold")
-        
-        # Lat
-        tk.Label(inputs, text="LAT:", font=label_font, bg=COLORS['bg_panel'], fg=COLORS['text_secondary']).grid(row=0, column=0, sticky="e", padx=(0, 3), pady=1)
-        self.lat_entry = tk.Entry(inputs, width=10, font=input_font, bg=COLORS['bg_header'], fg=COLORS['text_primary'], insertbackground=COLORS['text_primary'], relief="flat", bd=1)
-        self.lat_entry.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
-        
-        # Lon
-        tk.Label(inputs, text="LON:", font=label_font, bg=COLORS['bg_panel'], fg=COLORS['text_secondary']).grid(row=1, column=0, sticky="e", padx=(0, 3), pady=1)
-        self.lon_entry = tk.Entry(inputs, width=10, font=input_font, bg=COLORS['bg_header'], fg=COLORS['text_primary'], insertbackground=COLORS['text_primary'], relief="flat", bd=1)
-        self.lon_entry.grid(row=1, column=1, padx=2, pady=1, sticky="ew")
-        
-        # Alt
-        tk.Label(inputs, text="ALT:", font=label_font, bg=COLORS['bg_panel'], fg=COLORS['text_secondary']).grid(row=2, column=0, sticky="e", padx=(0, 3), pady=1)
-        self.alt_entry = tk.Entry(inputs, width=10, font=input_font, bg=COLORS['bg_header'], fg=COLORS['text_primary'], insertbackground=COLORS['text_primary'], relief="flat", bd=1)
-        self.alt_entry.grid(row=2, column=1, padx=2, pady=1, sticky="ew")
-        
-        inputs.grid_columnconfigure(1, weight=1)
 
-        # Buttons with professional styling
-        btns = tk.Frame(self.frame, bg=COLORS['bg_panel'])
-        btns.pack(fill="x", pady=(3, 0))
-        
-        btn_font = ("Consolas", 8, "bold")
-        
-        # Helper to create styled buttons
-        def create_cmd(func):
-            return lambda: threading.Thread(target=func, daemon=True).start() if self.connection else None
+def _haversine_m(lat1, lon1, lat2, lon2):
+    """Horizontal distance in metres between two lat/lon points."""
+    EARTH_RADIUS_M = 6_371_000
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(dlon / 2) ** 2)
+    return EARTH_RADIUS_M * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-        def create_button(parent, text, command, bg_color, row, col, colspan=1):
-            btn = tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=bg_color,
-                fg='white',
-                font=btn_font,
-                relief="flat",
-                bd=0,
-                padx=4,
-                pady=3,
-                cursor="hand2" if self.connection else "arrow"
-            )
-            btn.grid(row=row, column=col, columnspan=colspan, padx=1, pady=1, sticky="ew")
-            
-            # Hover effects
-            if self.connection:
-                btn.bind("<Enter>", lambda e: btn.config(bg=self._lighten_color(bg_color)))
-                btn.bind("<Leave>", lambda e: btn.config(bg=bg_color))
-            else:
-                btn.config(bg=COLORS['bg_header'], cursor="arrow")
-            
-            return btn
 
-        create_button(btns, "ARM", create_cmd(self.arm_drone), COLORS['btn_arm'], 0, 0)
-        create_button(btns, "TAKEOFF", create_cmd(lambda: self.takeoff(float(self.alt_entry.get() or 3))), COLORS['btn_takeoff'], 0, 1)
-        create_button(btns, "FLY TO", create_cmd(lambda: self.fly_to_gps(float(self.lat_entry.get()), float(self.lon_entry.get()), float(self.alt_entry.get() or 3))), COLORS['btn_flyto'], 1, 0)
-        create_button(btns, "RTL", create_cmd(self.rtl), COLORS['btn_rtl'], 1, 1)
-        create_button(btns, "LAND", create_cmd(self.land), COLORS['btn_land'], 2, 0, 2)
-        
-        btns.grid_columnconfigure(0, weight=1)
-        btns.grid_columnconfigure(1, weight=1)
+def check_formation_separation(positions_with_alt, min_sep_m=COLLISION_WARN_M):
+    """
+    Check pairwise 3-D separation between target positions.
 
-        self.update_pfd()
-        
-        # Start telemetry loop for this drone if connected
-        if self.connection:
-            # Request data stream to ensure we get GLOBAL_POSITION_INT
-            self.request_data_stream()
-            
-            threading.Thread(target=self.telemetry_loop, daemon=True).start()
-            # Start status checker
-            threading.Thread(target=self.check_connection_status, daemon=True).start()
-        else:
-            # If not connected, ensure status is red
-            self.set_status_light("red")
-            self.status_label.config(text="Status: Disconnected")
+    Args:
+        positions_with_alt: list of (lat, lon, alt) tuples.
+        min_sep_m:          Minimum acceptable 3-D separation in metres.
 
-    def _lighten_color(self, color):
-        """Lighten a hex color for hover effect"""
-        # Handle color names
-        color_map = {
-            'red': COLORS['status_critical'],
-            'green': COLORS['status_good'],
-            'yellow': COLORS['status_warning']
-        }
-        if color in color_map:
-            color = color_map[color]
-            
-        hex_color = color.lstrip('#')
-        r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        r = min(255, int(r * 1.2))
-        g = min(255, int(g * 1.2))
-        b = min(255, int(b * 1.2))
-        return f'#{r:02x}{g:02x}{b:02x}'
+    Returns:
+        List of (i, j, dist_3d_m) for every pair that is closer than min_sep_m.
+    """
+    warnings = []
+    for i in range(len(positions_with_alt)):
+        for j in range(i + 1, len(positions_with_alt)):
+            lat1, lon1, alt1 = positions_with_alt[i]
+            lat2, lon2, alt2 = positions_with_alt[j]
+            h = _haversine_m(lat1, lon1, lat2, lon2)
+            v = abs(alt1 - alt2)
+            dist_3d = math.sqrt(h * h + v * v)
+            if dist_3d < min_sep_m:
+                warnings.append((i, j, dist_3d))
+    return warnings
 
-    def request_data_stream(self):
-        # Request all data streams at 2Hz
-        self.connection.mav.request_data_stream_send(
-            self.sysid,
-            self.connection.target_component,
-            mavutil.mavlink.MAV_DATA_STREAM_ALL,
-            2, # Rate in Hz
-            1  # Start
-        )
 
-    def set_status_light(self, color):
-        # Map color names to hex
-        color_map = {
-            'red': COLORS['status_critical'],
-            'green': COLORS['status_good'],
-            'yellow': COLORS['status_warning']
-        }
-        if color in color_map:
-            color = color_map[color]
-            
-        self.status_light.delete("all")
-        # Draw outer ring
-        self.status_light.create_oval(2, 2, 18, 18, fill=color, outline=self._lighten_color(color), width=2)
-        # Draw inner glow
-        self.status_light.create_oval(5, 5, 15, 15, fill=self._lighten_color(color), outline="")
+def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
+                                follower_count, pattern="V", spacing_m=10.0):
+    """
+    Compute GPS positions for *follower_count* drones in the requested formation
+    relative to the leader.
 
-    def check_connection_status(self):
-        while True:
-            if time.time() - self.last_heartbeat > 3:
-                self.set_status_light(COLORS['status_critical'])
-            else:
-                self.set_status_light(COLORS['status_good'])
-            time.sleep(1)
+    Supported patterns:
+        "V"    – classic V-shape, followers trailing and fanning outward
+        "line" – single-file trail behind leader
 
-    def arm_drone(self):
-        if self.connection: arm_drone(self.connection, self.sysid)
+    Returns:
+        List of (lat, lon) tuples, one per follower.
+    """
+    m_per_lat, m_per_lon = _meters_to_deg(leader_lat)
+    heading_rad = math.radians(leader_heading_deg)
 
-    def disarm_drone(self):
-        if self.connection: disarm_drone(self.connection, self.sysid)
+    # Forward unit vector (NED: X=East, Y=North)
+    fwd_x = math.sin(heading_rad)
+    fwd_y = math.cos(heading_rad)
+    # Right unit vector (90° CW from forward)
+    right_x = math.cos(heading_rad)
+    right_y = -math.sin(heading_rad)
 
-    def takeoff(self, altitude):
-        if self.connection: takeoff(self.connection, self.sysid, altitude)
+    positions = []
 
-    def fly_to_gps(self, lat, lon, alt):
-        if self.connection: fly_to_gps(self.connection, self.sysid, lat, lon, alt)
+    if pattern == "V":
+        for i in range(follower_count):
+            row = (i // 2) + 1
+            side = 1 if i % 2 == 0 else -1  # even=right, odd=left
 
-    def rtl(self):
-        if self.connection: rtl(self.connection, self.sysid)
+            behind_m = row * spacing_m
+            side_m = row * spacing_m * side
 
-    def land(self):
-        if self.connection: land(self.connection, self.sysid)
+            # World offsets (East=x, North=y)
+            offset_x = -behind_m * fwd_x + side_m * right_x
+            offset_y = -behind_m * fwd_y + side_m * right_y
 
-    # ---------------- Telemetry Updates ----------------
-    def telemetry_loop(self):
-        while True:
-            try:
-                msg = self.connection.recv_match(blocking=True, timeout=1)
-                if msg:
-                    self.update_dashboard(msg)
-            except Exception as e:
-                print(f"Error in telemetry loop for drone {self.sysid}: {e}")
-                time.sleep(1)
+            positions.append((
+                leader_lat + offset_y / m_per_lat,
+                leader_lon + offset_x / m_per_lon,
+            ))
 
-    def update_dashboard(self, msg):
-        if msg.get_type() == "GLOBAL_POSITION_INT" and msg.get_srcSystem() == self.sysid:
-            lat = msg.lat / 1e7
-            lon = msg.lon / 1e7
-            self.current_alt = msg.relative_alt / 1000.0
-            
-            # Calculate speeds
-            h_speed = math.sqrt(msg.vx**2 + msg.vy**2) / 100.0
-            v_speed = -(msg.vz / 100.0)
-            
-            self.gps_label.config(text=f"Lat: {lat:.6f}, Lon: {lon:.6f}, Alt: {self.current_alt:.1f}m")
-            self.speed_label.config(text=f"H.Spd: {h_speed:.1f}, V.Spd: {v_speed:.1f} m/s")
+    elif pattern == "line":
+        for i in range(follower_count):
+            behind_m = (i + 1) * spacing_m
+            offset_x = -behind_m * fwd_x
+            offset_y = -behind_m * fwd_y
+            positions.append((
+                leader_lat + offset_y / m_per_lat,
+                leader_lon + offset_x / m_per_lon,
+            ))
 
-            # Update Shared Telemetry State for Web Dashboard
-            try:
-                from web_server import broadcast_telemetry
-                state = {
-                    self.sysid: {
-                        "lat": lat,
-                        "lon": lon,
-                        "alt": self.current_alt,
-                        "pitch": self.pitch,
-                        "roll": self.roll,
-                        "yaw": self.yaw,
-                        "h_speed": h_speed,
-                        "v_speed": v_speed
-                    }
-                }
-                broadcast_telemetry(state)
-            except ImportError:
-                pass
+    else:
+        # Unknown pattern — return empty list so the caller skips unknown followers
+        # rather than stacking all drones at the same position (collision hazard).
+        print(f"[Formation] Unknown pattern '{pattern}' – returning no follower positions.")
+        positions = []
 
-        if msg.get_type() == "HEARTBEAT" and msg.get_srcSystem() == self.sysid:
-            self.last_heartbeat = time.time()
-            conn_status = "Armed" if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED else "Disarmed"
-            self.status_label.config(text=f"Status: {conn_status}")
+    return positions
 
-        if msg.get_type() == "ATTITUDE" and msg.get_srcSystem() == self.sysid:
-            self.roll = math.degrees(msg.roll)
-            self.pitch = math.degrees(msg.pitch)
-            self.yaw = math.degrees(msg.yaw)
 
-    # ---------------- Primary Flight Display ----------------
-    def update_pfd(self):
-        try:
-            self.canvas.delete("all")
-
-            w, h = 100, 100
-            cx, cy = w//2, h//2
-
-            # Horizon shift
-            pitch_shift = self.pitch * 1.0
-            roll_angle = math.radians(self.roll)
-
-            # Sky (gradient blue) and ground (gradient brown)
-            self.canvas.create_rectangle(0, 0, w, h//2, fill="#1a4d7a", outline="")
-            self.canvas.create_rectangle(0, h//2, w, h, fill="#3d2817", outline="")
-
-            # Horizon line
-            line_len = 150
-            x1 = cx - line_len*math.cos(roll_angle)
-            y1 = cy - line_len*math.sin(roll_angle) + pitch_shift
-            x2 = cx + line_len*math.cos(roll_angle)
-            y2 = cy + line_len*math.sin(roll_angle) + pitch_shift
-            self.canvas.create_line(x1, y1, x2, y2, fill=COLORS['text_primary'], width=2)
-
-            # Aircraft symbol
-            self.canvas.create_line(cx-15, cy, cx+15, cy, fill=COLORS['accent_cyan'], width=2)
-            self.canvas.create_line(cx, cy-7, cx, cy+7, fill=COLORS['accent_cyan'], width=2)
-            self.canvas.create_oval(cx-2, cy-2, cx+2, cy+2, fill=COLORS['accent_cyan'], outline="")
-
-            # Heading text with background
-            heading_text = f"{self.yaw:.0f}°"
-            self.canvas.create_rectangle(cx-20, 6, cx+20, 18, fill=COLORS['bg_header'], outline=COLORS['border'])
-            self.canvas.create_text(cx, 12, text=heading_text, fill=COLORS['text_primary'], font=("Consolas", 8, "bold"))
-
-            # Pitch/Roll indicators
-            self.canvas.create_text(8, h-8, text=f"P:{self.pitch:.0f}°", fill=COLORS['text_secondary'], font=("Consolas", 7), anchor="w")
-            self.canvas.create_text(w-8, h-8, text=f"R:{self.roll:.0f}°", fill=COLORS['text_secondary'], font=("Consolas", 7), anchor="e")
-
-            self.canvas.after(100, self.update_pfd)
-        except Exception:
-            pass
-
-    # ------------------- Connection Logic -------------------
-
+# ======================== Connection Layer ========================
 class VirtualConnection:
-    """
-    Mimics a mavlink_connection for a specific system ID, 
-    routing traffic through a SharedConnection.
-    """
+    """Mimics a mavlink_connection for a specific sysid, routing through SharedConnection."""
+
     def __init__(self, shared_conn, sysid):
         self.shared_conn = shared_conn
         self.target_system = sysid
         self.target_component = 1
         self.mav = mavutil.mavlink.MAVLink(self, srcSystem=255, srcComponent=0)
-        
+
     def recv_match(self, condition=None, type=None, blocking=False, timeout=None):
-        # We delegate receiving to the shared connection's buffer for this sysid
         return self.shared_conn.get_message(self.target_system, type, blocking, timeout)
-    
+
     def write(self, buf):
-        # Forward raw writes based on the MAVLink protocol
         self.shared_conn.write(buf)
 
     def mav_send(self, msg):
         self.shared_conn.write(msg.pack(self.mav))
 
+
 class SharedConnection:
-    """
-    Manages a single physical connection (e.g., COM port) and dispatches 
-    messages to VirtualConnections based on their source system ID.
-    """
+    """Manages one physical serial/TCP connection and dispatches MAVLink msgs by sysid."""
+
     def __init__(self, connection_string, baud=57600):
+        self.connection_string = connection_string
+        self.baud = baud
         self.master = mavutil.mavlink_connection(connection_string, baud=baud)
-        self.buffers = {} # {sysid: [messages]}
+        self.buffers = {}  # {sysid: [messages]}
         self.stop_event = threading.Event()
         self.lock = threading.Lock()
-        
-        # Start a background thread to read from master
+
         self.thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.thread.start()
 
@@ -433,39 +225,27 @@ class SharedConnection:
                     with self.lock:
                         if sysid not in self.buffers:
                             self.buffers[sysid] = []
-                        # Append to buffer (limit size to prevent leaks)
                         self.buffers[sysid].append(msg)
                         if len(self.buffers[sysid]) > 100:
                             self.buffers[sysid].pop(0)
-            except Exception as e:
-                # print(f"SharedConnection Read Error: {e}")
+            except Exception:
                 pass
 
     def get_message(self, sysid, type_filter=None, blocking=False, timeout=None):
         start_time = time.time()
         while True:
-            found_msg = None
             with self.lock:
                 if sysid in self.buffers and self.buffers[sysid]:
-                    # Check filter
                     if type_filter:
-                        # Iterate to find matching type
                         for i, m in enumerate(self.buffers[sysid]):
                             if m.get_type() == type_filter:
-                                found_msg = self.buffers[sysid].pop(i)
-                                break
+                                return self.buffers[sysid].pop(i)
                     else:
-                        found_msg = self.buffers[sysid].pop(0)
-            
-            if found_msg:
-                return found_msg
-            
+                        return self.buffers[sysid].pop(0)
             if not blocking:
                 return None
-            
             if timeout and (time.time() - start_time > timeout):
                 return None
-            
             time.sleep(0.01)
 
     def write(self, buf):
@@ -473,368 +253,940 @@ class SharedConnection:
 
     def close(self):
         self.stop_event.set()
-        self.master.close()
+        try:
+            self.master.close()
+        except Exception:
+            pass
 
-# ------------------- Log Tee -------------------
+
+def connect_drones(mode, drone_specs, baud=57600):
+    """
+    Create MAVLink connections for all specified drones.
+
+    Args:
+        mode:        "sitl" or "real"
+        drone_specs: SITL – list of port numbers/strings (e.g. ["5762", "5772"])
+                     Real – list of "COM:SYSID" strings (e.g. ["COM3:1", "COM3:2"])
+        baud:        Baud rate for serial connections.
+
+    Returns:
+        (drone_list, shared_connections)
+          drone_list         – list of dicts {sysid, connection, port}
+          shared_connections – list of SharedConnection objects to close at exit
+    """
+    drone_list = []
+    shared_connections = []
+
+    if mode == "sitl":
+        for spec in drone_specs:
+            port = int(spec)
+            address = f"tcp:127.0.0.1:{port}"
+            print(f"Connecting to SITL drone at {address}...")
+            try:
+                conn = mavutil.mavlink_connection(address)
+                msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=5)
+                if msg:
+                    sysid = conn.target_system
+                    print(f"  ✓ Drone sysid={sysid} on port {port}")
+                    drone_list.append({"sysid": sysid, "connection": conn, "port": port})
+                else:
+                    print(f"  ✗ No HEARTBEAT on port {port}")
+                    conn.close()
+            except Exception as e:
+                print(f"  ✗ Error connecting to {address}: {e}")
+
+    elif mode == "real":
+        # Group by COM port so one SharedConnection handles all sysids on the same bus
+        port_map = {}
+        for spec in drone_specs:
+            if ":" not in spec:
+                print(f"  Invalid real drone spec '{spec}' (expected COM:SYSID). Skipping.")
+                continue
+            com, _, sysid_str = spec.rpartition(":")
+            try:
+                sysid = int(sysid_str)
+            except ValueError:
+                print(f"  Invalid sysid '{sysid_str}' in '{spec}'. Skipping.")
+                continue
+            port_map.setdefault(com, []).append(sysid)
+
+        for com_port, sysids in port_map.items():
+            print(f"Connecting to real drones on {com_port} @ {baud}bps, sysids={sysids}...")
+            try:
+                shared_conn = SharedConnection(com_port, baud=baud)
+                shared_connections.append(shared_conn)
+                time.sleep(HEARTBEAT_WAIT_REAL_S)  # Allow heartbeats to arrive
+                for sysid in sysids:
+                    v_conn = VirtualConnection(shared_conn, sysid)
+                    drone_list.append({"sysid": sysid, "connection": v_conn, "port": com_port})
+                    print(f"  ✓ Registered sysid={sysid} on {com_port}")
+            except Exception as e:
+                print(f"  ✗ Error on {com_port}: {e}")
+
+    return drone_list, shared_connections
+
+
+def start_watchdog(drone_list, mode, baud):
+    """
+    Background thread: monitors heartbeat age per drone and attempts reconnection.
+    Broadcasts live status to the web dashboard.
+    """
+    def _loop():
+        try:
+            from web_server import broadcast_log, broadcast_status
+        except ImportError:
+            return
+
+        while True:
+            time.sleep(5)
+            for entry in drone_list:
+                handler = entry.get("handler")
+                if handler is None:
+                    continue
+                sysid = handler.sysid
+                age = time.time() - handler.last_heartbeat
+                if age > HEARTBEAT_TIMEOUT_S:
+                    broadcast_log(
+                        f"[Watchdog] Drone {sysid} lost "
+                        f"(no heartbeat for {age:.0f}s). Reconnecting..."
+                    )
+                    if mode == "sitl":
+                        port = entry.get("port")
+                        address = f"tcp:127.0.0.1:{port}"
+                        try:
+                            new_conn = mavutil.mavlink_connection(address)
+                            hb = new_conn.recv_match(
+                                type="HEARTBEAT", blocking=True, timeout=5
+                            )
+                            if hb:
+                                entry["connection"] = new_conn
+                                handler.connection = new_conn
+                                handler.request_data_stream()
+                                broadcast_log(f"[Watchdog] Drone {sysid} reconnected.")
+                            else:
+                                new_conn.close()
+                        except Exception as e:
+                            broadcast_log(
+                                f"[Watchdog] Reconnect failed for drone {sysid}: {e}"
+                            )
+                    broadcast_status({
+                        "drone_status": {"sysid": sysid, "connected": age <= HEARTBEAT_TIMEOUT_S}
+                    })
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
+# ======================== Log Tee ========================
 class LoggerTee:
     def __init__(self, stream, callback):
         self.stream = stream
         self.callback = callback
-    
+
     def write(self, message):
         self.stream.write(message)
         if message.strip():
             self.callback(message.strip())
-            
+
     def flush(self):
         self.stream.flush()
 
-# ------------------- Connection Scanning -------------------
-def scan_for_drones_sim(max_drones=8, start_port=5762):
-    import socket
-    drone_slots = [None] * max_drones
-    
-    print(f"Scanning for up to {max_drones} simulated drones starting at port {start_port}...")
-    
-    for i in range(max_drones):
-        port = start_port + (i * 10)
-        address = f'tcp:127.0.0.1:{port}'
-        print(f"Checking {address}...", end=" ", flush=True)
-        
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        result = sock.connect_ex(('127.0.0.1', port))
-        sock.close()
 
-        if result != 0:
-            print("x Port closed")
-            continue
+# ======================== Base Drone Handler (headless) ========================
+class BaseDroneHandler:
+    """MAVLink telemetry handler – no GUI dependency."""
+
+    def __init__(self, sysid, connection):
+        self.sysid = sysid
+        self.connection = connection
+
+        self.pitch = 0.0
+        self.roll = 0.0
+        self.yaw = 0.0
+
+        self.lat = 0.0
+        self.lon = 0.0
+        self.current_alt = 0.0   # relative to home (AGL)
+        self.alt_msl = 0.0       # MSL altitude
+        self.home_alt = None     # MSL alt at first valid fix
+
+        self.last_heartbeat = 0.0
+        self.armed = False
+
+        if self.connection:
+            self.request_data_stream()
+            threading.Thread(target=self.telemetry_loop, daemon=True).start()
+
+    def request_data_stream(self):
+        try:
+            self.connection.mav.request_data_stream_send(
+                self.sysid,
+                self.connection.target_component,
+                mavutil.mavlink.MAV_DATA_STREAM_ALL,
+                DATA_STREAM_RATE_HZ,
+                1,
+            )
+        except Exception:
+            pass
+
+    def telemetry_loop(self):
+        while True:
+            try:
+                msg = self.connection.recv_match(blocking=True, timeout=1)
+                if msg:
+                    self.process_message(msg)
+            except Exception as e:
+                print(f"[Drone {self.sysid}] Telemetry error: {e}")
+                time.sleep(1)
+
+    def process_message(self, msg):
+        t = msg.get_type()
+        if t == "GLOBAL_POSITION_INT" and msg.get_srcSystem() == self.sysid:
+            self._on_position(msg)
+        elif t == "HEARTBEAT" and msg.get_srcSystem() == self.sysid:
+            self._on_heartbeat(msg)
+        elif t == "ATTITUDE" and msg.get_srcSystem() == self.sysid:
+            self._on_attitude(msg)
+
+    def _on_position(self, msg):
+        self.lat = msg.lat / 1e7
+        self.lon = msg.lon / 1e7
+        self.alt_msl = msg.alt / 1000.0
+        self.current_alt = msg.relative_alt / 1000.0
+
+        # Capture home altitude on first valid fix
+        if self.home_alt is None and abs(self.lat) > 0.001:
+            self.home_alt = self.alt_msl - self.current_alt
+            print(f"[Drone {self.sysid}] Home alt: {self.home_alt:.2f}m MSL")
+
+        h_speed = math.sqrt(msg.vx ** 2 + msg.vy ** 2) / 100.0
+        v_speed = -(msg.vz / 100.0)
 
         try:
-            conn = mavutil.mavlink_connection(address)
-            msg = conn.recv_match(type='HEARTBEAT', blocking=True, timeout=2)
-            
-            if msg:
-                sysid = conn.target_system
-                print(f"✅ Found Drone (System ID: {sysid})")
-                drone_slots[i] = {'sysid': sysid, 'connection': conn}
-            else:
-                print(f"x No heartbeat")
-                conn.close()
-                
-        except Exception as e:
-            print(f"x Error: {e}")
-            
-    return drone_slots, [] # Return empty list for shared connections to close
+            from web_server import broadcast_telemetry
+            broadcast_telemetry({
+                self.sysid: {
+                    "lat": self.lat,
+                    "lon": self.lon,
+                    "alt": self.current_alt,
+                    "alt_msl": self.alt_msl,
+                    "home_alt": self.home_alt if self.home_alt is not None else 0.0,
+                    "pitch": self.pitch,
+                    "roll": self.roll,
+                    "yaw": self.yaw,
+                    "h_speed": h_speed,
+                    "v_speed": v_speed,
+                    "armed": self.armed,
+                }
+            })
+        except ImportError:
+            pass
 
-def scan_for_drones_real(com_port, baud_rate):
-    print(f"Connecting to Mesh Swarm on {com_port} @ {baud_rate}...")
-    try:
-        shared_conn = SharedConnection(com_port, baud=baud_rate)
-        
-        print("Listening for heartbeats (5 seconds)...")
-        # Listen for a few seconds to identify active drones
-        active_sysids = set()
-        start = time.time()
-        while time.time() - start < 5:
-            # We peek into the buffers of the shared conn without Popping to just see who is there
-            # Or simplified: The SharedConnection assumes we want to consume.
-            # Let's just wait. The reader loop will populate buffers.
-            with shared_conn.lock:
-                for sysid in shared_conn.buffers.keys():
-                    active_sysids.add(sysid)
-            time.sleep(0.1)
-            print(f"\rFound: {list(active_sysids)}", end="")
-        
-        print("\nDiscovery complete.")
-        
-        drone_slots = [None] * 8
-        # Fill slots with found system IDs. 
-        # We can map them 1-to-1 or just fill sequentially.
-        # Let's try to map sysid 1 -> slot 0, sysid 2 -> slot 1, etc if possible.
-        
-        for sysid in active_sysids:
-            idx = sysid - 1
-            if 0 <= idx < 8:
-                v_conn = VirtualConnection(shared_conn, sysid)
-                drone_slots[idx] = {'sysid': sysid, 'connection': v_conn}
+    def _on_heartbeat(self, msg):
+        self.last_heartbeat = time.time()
+        self.armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+    def _on_attitude(self, msg):
+        self.roll = math.degrees(msg.roll)
+        self.pitch = math.degrees(msg.pitch)
+        self.yaw = math.degrees(msg.yaw)
+
+    # ---- Commands ----
+    def arm_drone(self):
+        if self.connection:
+            arm_drone(self.connection, self.sysid)
+
+    def disarm_drone(self):
+        if self.connection:
+            disarm_drone(self.connection, self.sysid)
+
+    def takeoff(self, altitude):
+        if self.connection:
+            takeoff(self.connection, self.sysid, altitude)
+
+    def fly_to_gps(self, lat, lon, alt):
+        if self.connection:
+            fly_to_gps(self.connection, self.sysid, lat, lon, alt)
+
+    def rtl(self):
+        if self.connection:
+            rtl(self.connection, self.sysid)
+
+    def land(self):
+        if self.connection:
+            land(self.connection, self.sysid)
+
+
+# ======================== Tkinter GUI Drone Handler ========================
+# Imported lazily so headless mode never touches tkinter.
+
+def _build_gui_handler_class():
+    """Returns the DroneHandler class (Tkinter). Called only when --control is used."""
+    import tkinter as tk
+    from tkinter import font as tkfont
+
+    COLORS = {
+        'bg_dark': '#1a1a1a',
+        'bg_panel': '#2a2a2a',
+        'bg_header': '#333333',
+        'border': '#4a4a4a',
+        'text_primary': '#ffffff',
+        'text_secondary': '#b0b0b0',
+        'accent_blue': '#2196f3',
+        'accent_cyan': '#00d4ff',
+        'status_good': '#4caf50',
+        'status_warning': '#ffc107',
+        'status_critical': '#f44336',
+        'btn_arm': '#616161',
+        'btn_takeoff': '#4caf50',
+        'btn_flyto': '#ffc107',
+        'btn_rtl': '#ff9800',
+        'btn_land': '#2196f3',
+    }
+
+    class DroneHandler(BaseDroneHandler):
+        def __init__(self, sysid, connection, container):
+            # GUI widgets (set before super().__init__ starts threads)
+            self.gps_label = None
+            self.speed_label = None
+            self.status_label = None
+            self.status_light = None
+            self._colors = COLORS
+
+            title = f"DRONE {sysid}" if sysid != "N/A" else "DRONE (DISCONNECTED)"
+            self.frame = tk.LabelFrame(
+                container, text=title, padx=4, pady=4,
+                font=("Consolas", 9, "bold"),
+                bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
+                bd=1, relief="flat",
+                highlightbackground=COLORS['border'], highlightthickness=1,
+            )
+            self.frame.pack(side="left", padx=3, pady=3, fill="both", expand=True)
+
+            header_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
+            header_frame.pack(fill="x", pady=(0, 3))
+
+            self.status_light = tk.Canvas(
+                header_frame, width=20, height=20,
+                bg=COLORS['bg_panel'], highlightthickness=0,
+            )
+            self.status_light.pack(side="right", padx=3)
+
+            display_frame = tk.Frame(self.frame, bg=COLORS['bg_panel'])
+            display_frame.pack(fill="x", pady=3)
+
+            self.canvas = tk.Canvas(
+                display_frame, width=100, height=100,
+                bg='#0a0a0a', highlightthickness=1,
+                highlightbackground=COLORS['border'],
+            )
+            self.canvas.pack(side="left", padx=(0, 6))
+
+            dashboard_frame = tk.Frame(display_frame, bg=COLORS['bg_panel'])
+            dashboard_frame.pack(side="left", fill="both", expand=True)
+
+            tf = ("Consolas", 8)
+            self.gps_label = tk.Label(
+                dashboard_frame, text="Lat: --, Lon: --, Alt: --",
+                font=tf, bg=COLORS['bg_panel'], fg=COLORS['accent_cyan'], anchor="w",
+            )
+            self.gps_label.pack(fill="x", pady=1)
+
+            self.speed_label = tk.Label(
+                dashboard_frame, text="H.Spd: --, V.Spd: -- m/s",
+                font=tf, bg=COLORS['bg_panel'], fg=COLORS['accent_cyan'], anchor="w",
+            )
+            self.speed_label.pack(fill="x", pady=1)
+
+            self.status_label = tk.Label(
+                dashboard_frame, text="Status: --",
+                font=tf, bg=COLORS['bg_panel'], fg=COLORS['text_secondary'], anchor="w",
+            )
+            self.status_label.pack(fill="x", pady=1)
+
+            separator = tk.Frame(self.frame, height=1, bg=COLORS['border'])
+            separator.pack(fill="x", pady=3)
+
+            inputs = tk.Frame(self.frame, bg=COLORS['bg_panel'])
+            inputs.pack(fill="x", pady=2)
+
+            lf = ("Consolas", 8, "bold")
+            ef = ("Consolas", 8)
+            for row_idx, label in enumerate(["LAT:", "LON:", "ALT:"]):
+                tk.Label(inputs, text=label, font=lf,
+                         bg=COLORS['bg_panel'], fg=COLORS['text_secondary']
+                         ).grid(row=row_idx, column=0, sticky="e", padx=(0, 3), pady=1)
+            self.lat_entry = tk.Entry(
+                inputs, width=10, font=ef,
+                bg=COLORS['bg_header'], fg=COLORS['text_primary'],
+                insertbackground=COLORS['text_primary'], relief="flat", bd=1,
+            )
+            self.lat_entry.grid(row=0, column=1, padx=2, pady=1, sticky="ew")
+            self.lon_entry = tk.Entry(
+                inputs, width=10, font=ef,
+                bg=COLORS['bg_header'], fg=COLORS['text_primary'],
+                insertbackground=COLORS['text_primary'], relief="flat", bd=1,
+            )
+            self.lon_entry.grid(row=1, column=1, padx=2, pady=1, sticky="ew")
+            self.alt_entry = tk.Entry(
+                inputs, width=10, font=ef,
+                bg=COLORS['bg_header'], fg=COLORS['text_primary'],
+                insertbackground=COLORS['text_primary'], relief="flat", bd=1,
+            )
+            self.alt_entry.grid(row=2, column=1, padx=2, pady=1, sticky="ew")
+            inputs.grid_columnconfigure(1, weight=1)
+
+            btns = tk.Frame(self.frame, bg=COLORS['bg_panel'])
+            btns.pack(fill="x", pady=(3, 0))
+
+            bf = ("Consolas", 8, "bold")
+
+            def _threaded(func):
+                return lambda: threading.Thread(target=func, daemon=True).start() if connection else None
+
+            def _btn(parent, text, command, bg_color, row, col, colspan=1):
+                b = tk.Button(
+                    parent, text=text, command=command,
+                    bg=bg_color, fg='white', font=bf,
+                    relief="flat", bd=0, padx=4, pady=3,
+                    cursor="hand2" if connection else "arrow",
+                )
+                b.grid(row=row, column=col, columnspan=colspan,
+                       padx=1, pady=1, sticky="ew")
+                if connection:
+                    b.bind("<Enter>", lambda e: b.config(bg=self._lighten(bg_color)))
+                    b.bind("<Leave>", lambda e: b.config(bg=bg_color))
+                else:
+                    b.config(bg=COLORS['bg_header'], cursor="arrow")
+                return b
+
+            _btn(btns, "ARM", _threaded(self.arm_drone), COLORS['btn_arm'], 0, 0)
+            _btn(btns, "TAKEOFF",
+                 _threaded(lambda: self.takeoff(float(self.alt_entry.get() or 3))),
+                 COLORS['btn_takeoff'], 0, 1)
+            _btn(btns, "FLY TO",
+                 _threaded(lambda: self.fly_to_gps(
+                     float(self.lat_entry.get()),
+                     float(self.lon_entry.get()),
+                     float(self.alt_entry.get() or 3),
+                 )),
+                 COLORS['btn_flyto'], 1, 0)
+            _btn(btns, "RTL", _threaded(self.rtl), COLORS['btn_rtl'], 1, 1)
+            _btn(btns, "LAND", _threaded(self.land), COLORS['btn_land'], 2, 0, 2)
+            btns.grid_columnconfigure(0, weight=1)
+            btns.grid_columnconfigure(1, weight=1)
+
+            # Call parent __init__ AFTER widgets exist so _on_position can update them
+            super().__init__(sysid, connection)
+            self.set_status_light("red")
+            self.update_pfd()
+            if connection:
+                threading.Thread(target=self._check_connection_status, daemon=True).start()
             else:
-                print(f"Warning: Drone {sysid} out of slot range (1-8). Ignoring.")
-                
-        return drone_slots, [shared_conn]
+                self.status_label.config(text="Status: Disconnected")
+
+        # ---- GUI helpers ----
+        def _lighten(self, color):
+            cmap = {
+                'red': COLORS['status_critical'],
+                'green': COLORS['status_good'],
+                'yellow': COLORS['status_warning'],
+            }
+            color = cmap.get(color, color)
+            h = color.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return (f'#{min(255, int(r*1.2)):02x}'
+                    f'{min(255, int(g*1.2)):02x}'
+                    f'{min(255, int(b*1.2)):02x}')
+
+        def set_status_light(self, color):
+            cmap = {
+                'red': COLORS['status_critical'],
+                'green': COLORS['status_good'],
+                'yellow': COLORS['status_warning'],
+            }
+            color = cmap.get(color, color)
+            self.status_light.delete("all")
+            self.status_light.create_oval(2, 2, 18, 18,
+                                          fill=color, outline=self._lighten(color), width=2)
+            self.status_light.create_oval(5, 5, 15, 15,
+                                          fill=self._lighten(color), outline="")
+
+        def _check_connection_status(self):
+            while True:
+                age = time.time() - self.last_heartbeat
+                color = COLORS['status_critical'] if age > HEARTBEAT_WARN_S else COLORS['status_good']
+                self.set_status_light(color)
+                time.sleep(1)
+
+        # ---- Override telemetry callbacks to also update GUI ----
+        def _on_position(self, msg):
+            super()._on_position(msg)
+            h_speed = math.sqrt(msg.vx ** 2 + msg.vy ** 2) / 100.0
+            v_speed = -(msg.vz / 100.0)
+            try:
+                self.gps_label.config(
+                    text=f"Lat: {self.lat:.6f}, Lon: {self.lon:.6f}, Alt: {self.current_alt:.1f}m"
+                )
+                self.speed_label.config(
+                    text=f"H.Spd: {h_speed:.1f}, V.Spd: {v_speed:.1f} m/s"
+                )
+            except Exception:
+                pass
+
+        def _on_heartbeat(self, msg):
+            super()._on_heartbeat(msg)
+            status = "Armed" if self.armed else "Disarmed"
+            try:
+                self.status_label.config(text=f"Status: {status}")
+            except Exception:
+                pass
+
+        def update_pfd(self):
+            try:
+                self.canvas.delete("all")
+                w, h = 100, 100
+                cx, cy = w // 2, h // 2
+                pitch_shift = self.pitch * 1.0
+                roll_angle = math.radians(self.roll)
+
+                self.canvas.create_rectangle(0, 0, w, h // 2, fill="#1a4d7a", outline="")
+                self.canvas.create_rectangle(0, h // 2, w, h, fill="#3d2817", outline="")
+
+                line_len = 150
+                x1 = cx - line_len * math.cos(roll_angle)
+                y1 = cy - line_len * math.sin(roll_angle) + pitch_shift
+                x2 = cx + line_len * math.cos(roll_angle)
+                y2 = cy + line_len * math.sin(roll_angle) + pitch_shift
+                self.canvas.create_line(x1, y1, x2, y2, fill=COLORS['text_primary'], width=2)
+
+                self.canvas.create_line(cx - 15, cy, cx + 15, cy, fill=COLORS['accent_cyan'], width=2)
+                self.canvas.create_line(cx, cy - 7, cx, cy + 7, fill=COLORS['accent_cyan'], width=2)
+                self.canvas.create_oval(cx - 2, cy - 2, cx + 2, cy + 2,
+                                        fill=COLORS['accent_cyan'], outline="")
+
+                self.canvas.create_rectangle(cx - 20, 6, cx + 20, 18,
+                                             fill=COLORS['bg_header'], outline=COLORS['border'])
+                self.canvas.create_text(cx, 12, text=f"{self.yaw:.0f}°",
+                                        fill=COLORS['text_primary'],
+                                        font=("Consolas", 8, "bold"))
+                self.canvas.create_text(8, h - 8, text=f"P:{self.pitch:.0f}°",
+                                        fill=COLORS['text_secondary'],
+                                        font=("Consolas", 7), anchor="w")
+                self.canvas.create_text(w - 8, h - 8, text=f"R:{self.roll:.0f}°",
+                                        fill=COLORS['text_secondary'],
+                                        font=("Consolas", 7), anchor="e")
+                self.canvas.after(100, self.update_pfd)
+            except Exception:
+                pass
+
+    return DroneHandler, COLORS
+
+
+# ======================== Swarm Logic ========================
+# Module-level state for swarm
+_leader_sysid = 1  # Hardcoded default leader is Drone 1
+_leader_lock = threading.Lock()
+
+# Mission state & Inactivity watchdog
+_mission_in_progress = threading.Event()
+_last_activity_time = time.time()
+_watchdog_thread_started = False
+_active_handlers_ref = []
+
+
+def notify_user_activity():
+    """Reset the 30-second inactivity RTL timer."""
+    global _last_activity_time
+    _last_activity_time = time.time()
+
+
+def set_leader(sysid):
+    global _leader_sysid
+    with _leader_lock:
+        _leader_sysid = int(sysid)
+    print(f"[Swarm] Leader set to drone {sysid}")
+    try:
+        from web_server import broadcast_status
+        broadcast_status({"leader": sysid})
+    except ImportError:
+        pass
+
+
+def get_leader(active_handlers):
+    """Return the leader handler (default SysID 1) from active_handlers."""
+    with _leader_lock:
+        lsid = _leader_sysid
+    for h in active_handlers:
+        if h.sysid == lsid:
+            return h
+    # If sysid 1 not present, fallback to first active drone
+    return active_handlers[0] if active_handlers else None
+
+
+def _inactivity_watchdog_loop():
+    """Background watchdog: if drones are airborne/hovering and inactive for 30s, RTL.
+    DOES NOT fire when a drone is actively climbing or navigating to a target.
+    """
+    global _last_activity_time
+    while True:
+        time.sleep(1.0)
+        # Check if mission is currently in progress (flying/climbing)
+        if _mission_in_progress.is_set():
+            _last_activity_time = time.time()
+            continue
+
+        active = [h for h in _active_handlers_ref if h.sysid != "N/A" and h.connection]
+        # Only trigger if at least one drone is armed and airborne (alt > 1.0m)
+        airborne_drones = [h for h in active if h.armed and h.current_alt > 1.0]
+        if not airborne_drones:
+            _last_activity_time = time.time()
+            continue
+
+        idle_seconds = time.time() - _last_activity_time
+        if idle_seconds >= INACTIVITY_RTL_TIMEOUT_S:
+            print(f"[Watchdog] Inactivity timeout ({idle_seconds:.1f}s >= {INACTIVITY_RTL_TIMEOUT_S}s). "
+                  f"Hovering drones initiating automatic RTL.")
+            try:
+                from web_server import broadcast_log
+                broadcast_log(
+                    f"[AUTO-RTL] Inactivity timeout ({INACTIVITY_RTL_TIMEOUT_S:.0f}s with no commands). "
+                    f"Swarm returning to launch."
+                )
+            except Exception:
+                pass
+
+            for h in airborne_drones:
+                threading.Thread(target=h.rtl, daemon=True).start()
+
+            # Reset timer so it doesn't repeatedly spam RTL
+            _last_activity_time = time.time()
+
+
+def _start_inactivity_watchdog():
+    global _watchdog_thread_started
+    if not _watchdog_thread_started:
+        _watchdog_thread_started = True
+        threading.Thread(target=_inactivity_watchdog_loop, daemon=True).start()
+
+
+def _autonomous_mission_worker(cmd_data, active_handlers):
+    """
+    Autonomous one-click mission:
+    1. If not armed/airborne, sets GUIDED, arms, and commands takeoff to target altitude.
+    2. Waits for all drones to reach hover altitude (alt >= target_alt - 1.0m).
+    3. Calculates formation offsets relative to Drone 1 (Leader).
+    4. Commands drones to their respective target positions.
+    5. Monitors navigation progress until drones arrive near targets.
+    6. Returns swarm to hovering state; arms the 30-second inactivity watchdog.
+    """
+    global _last_activity_time
+    _mission_in_progress.set()
+    try:
+        lat = float(cmd_data.get("lat"))
+        lon = float(cmd_data.get("lon"))
+        target_alt = float(cmd_data.get("alt", 5.0))
+        formation = cmd_data.get("formation", False)
+        pattern = cmd_data.get("pattern", "V")
+        spacing_m = float(cmd_data.get("spacing_m", 10.0))
+
+        leader = get_leader(active_handlers)
+        if leader is None:
+            return
+
+        print(f"[Mission] Starting autonomous mission to ({lat:.6f}, {lon:.6f}, {target_alt:.1f}m)...")
+        try:
+            from web_server import broadcast_log
+            broadcast_log(f"[Mission] Initiating autonomous swarm mission to {lat:.6f}, {lon:.6f} at {target_alt}m.")
+        except Exception:
+            pass
+
+        # Step 1: Check which drones need takeoff
+        takeoff_needed = [h for h in active_handlers if not h.armed or h.current_alt < 1.0]
+        if takeoff_needed:
+            print(f"[Mission] {len(takeoff_needed)} drone(s) require launch. Executing staggered takeoff...")
+            for i, h in enumerate(takeoff_needed):
+                if i > 0:
+                    time.sleep(TAKEOFF_STAGGER_S)
+                threading.Thread(target=h.takeoff, args=(target_alt,), daemon=True).start()
+
+            # Step 2: Wait until all drones reach target altitude (within 1.0m tolerance)
+            climb_start = time.time()
+            climb_timeout_s = 60.0
+            while time.time() - climb_start < climb_timeout_s:
+                all_at_alt = True
+                for h in active_handlers:
+                    if h.current_alt < (target_alt - 1.0):
+                        all_at_alt = False
+                        break
+                if all_at_alt:
+                    print("[Mission] All drones reached target altitude.")
+                    break
+                time.sleep(0.5)
+
+        # Step 3: Compute targets & formations
+        followers = [h for h in active_handlers if h is not leader]
+        if formation and followers:
+            heading = leader.yaw
+            offsets = calculate_formation_offsets(
+                lat, lon, heading,
+                follower_count=len(followers),
+                pattern=pattern,
+                spacing_m=spacing_m,
+            )
+            targets = [(lat, lon, target_alt)] + [(f_lat, f_lon, target_alt) for f_lat, f_lon in offsets]
+            conflicts = check_formation_separation(targets, min_sep_m=COLLISION_WARN_M)
+            if conflicts:
+                print(f"[Swarm] Collision warning – {len(conflicts)} pair(s) within {COLLISION_WARN_M}m. Staggering altitudes.")
+                targets = [
+                    (t_lat, t_lon, t_alt + i * COLLISION_ALT_STEP_M)
+                    for i, (t_lat, t_lon, t_alt) in enumerate(targets)
+                ]
+            drone_target_map = {leader: targets[0]}
+            for h, tgt in zip(followers, targets[1:]):
+                drone_target_map[h] = tgt
+        else:
+            drone_target_map = {}
+            for i, h in enumerate(active_handlers):
+                stagger_alt = target_alt + (i * COLLISION_ALT_STEP_M if len(active_handlers) > 1 else 0)
+                drone_target_map[h] = (lat, lon, stagger_alt)
+
+        # Step 4: Dispatch fly_to commands
+        for h, (t_lat, t_lon, t_alt) in drone_target_map.items():
+            threading.Thread(target=h.fly_to_gps, args=(t_lat, t_lon, t_alt), daemon=True).start()
+
+        # Step 5: Monitor horizontal progress until arrived (within 2.5m)
+        nav_start = time.time()
+        nav_timeout_s = 180.0
+        while time.time() - nav_start < nav_timeout_s:
+            all_arrived = True
+            for h, (t_lat, t_lon, _) in drone_target_map.items():
+                if abs(h.lat) > 0.001 and abs(h.lon) > 0.001:
+                    dist = _haversine_m(h.lat, h.lon, t_lat, t_lon)
+                    if dist > 2.5:
+                        all_arrived = False
+                        break
+            if all_arrived:
+                print("[Mission] All drones arrived at waypoint formation. Now hovering.")
+                try:
+                    from web_server import broadcast_log
+                    broadcast_log("[Mission] Swarm arrived at target formation. Hovering for new commands (Auto-RTL in 30s if idle).")
+                except Exception:
+                    pass
+                break
+            time.sleep(1.0)
 
     except Exception as e:
-        print(f"Connection Failed: {e}")
-        return [None]*8, []
+        print(f"[Mission] Error in autonomous mission worker: {e}")
+    finally:
+        # Step 6: Mark mission complete; start the 30-second idle countdown from now
+        _mission_in_progress.clear()
+        _last_activity_time = time.time()
 
-# ------------------- Mode Selection Dialog -------------------
-class ConnectionDialog:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("Connection Settings")
-        self.root.geometry("400x300")
-        self.root.configure(bg=COLORS['bg_panel'])
-        
-        self.result = None # Will hold (mode, com_port, baud)
-        
-        self._setup_ui()
-        
-    def _setup_ui(self):
-        style_font = ("Consolas", 10)
-        
-        tk.Label(self.root, text="Select Connection Mode", font=("Consolas", 12, "bold"), 
-                 bg=COLORS['bg_panel'], fg=COLORS['text_primary']).pack(pady=20)
-        
-        # Mode variable
-        self.mode_var = tk.StringVar(value="SIM")
-        
-        # Frames
-        frame_sim = tk.Frame(self.root, bg=COLORS['bg_panel'])
-        frame_real = tk.Frame(self.root, bg=COLORS['bg_panel'])
-        
-        def update_visibility():
-            if self.mode_var.get() == "REAL":
-                entry_state = "normal"
-                bg_color = COLORS['bg_header']
-            else:
-                entry_state = "disabled"
-                bg_color = COLORS['bg_dark']
-                
-            self.com_entry.config(state=entry_state, bg=bg_color)
-            self.baud_entry.config(state=entry_state, bg=bg_color)
 
-        tk.Radiobutton(self.root, text="Simulated Swarm (TCP Localhost)", variable=self.mode_var, 
-                       value="SIM", command=update_visibility,
-                       bg=COLORS['bg_panel'], fg=COLORS['text_primary'], selectcolor=COLORS['bg_dark'],
-                       activebackground=COLORS['bg_panel'], activeforeground=COLORS['text_primary'], font=style_font).pack(anchor="w", padx=30)
-        
-        tk.Radiobutton(self.root, text="Real Swarm (Mesh/Serial)", variable=self.mode_var, 
-                       value="REAL", command=update_visibility,
-                       bg=COLORS['bg_panel'], fg=COLORS['text_primary'], selectcolor=COLORS['bg_dark'],
-                       activebackground=COLORS['bg_panel'], activeforeground=COLORS['text_primary'], font=style_font).pack(anchor="w", padx=30)
-        
-        # Options Frame
-        opts = tk.Frame(self.root, bg=COLORS['bg_panel'], padx=20, pady=10)
-        opts.pack(fill="x", padx=30)
-        
-        tk.Label(opts, text="COM Port:", bg=COLORS['bg_panel'], fg=COLORS['text_secondary'], font=style_font).grid(row=0, column=0, sticky="w")
-        self.com_entry = tk.Entry(opts, font=style_font, bg=COLORS['bg_dark'], fg=COLORS['text_primary'], disabledbackground=COLORS['bg_dark'])
-        self.com_entry.insert(0, "COM14")
-        self.com_entry.grid(row=0, column=1, padx=10, sticky="ew")
-        
-        tk.Label(opts, text="Baud Rate:", bg=COLORS['bg_panel'], fg=COLORS['text_secondary'], font=style_font).grid(row=1, column=0, sticky="w", pady=5)
-        self.baud_entry = tk.Entry(opts, font=style_font, bg=COLORS['bg_dark'], fg=COLORS['text_primary'], disabledbackground=COLORS['bg_dark'])
-        self.baud_entry.insert(0, "57600")
-        self.baud_entry.grid(row=1, column=1, padx=10, sticky="ew", pady=5)
-        
-        update_visibility()
-        
-        # Connect Button
-        tk.Button(self.root, text="CONNECT", command=self.on_connect,
-                 bg=COLORS['accent_blue'], fg='white', font=("Consolas", 11, "bold"),
-                 relief="flat", padx=20, pady=5).pack(pady=20)
-                 
-    def on_connect(self):
-        mode = self.mode_var.get()
-        com = self.com_entry.get()
-        baud = int(self.baud_entry.get())
-        self.result = (mode, com, baud)
-        self.root.destroy()
-        
-    def run(self):
-        self.root.mainloop()
-        return self.result
+def perform_swarm_command(cmd_data, drone_handlers):
+    global _active_handlers_ref
+    notify_user_activity()
+    _start_inactivity_watchdog()
 
-# ------------------- Tkinter UI -------------------
+    cmd = cmd_data.get("cmd")
+    print(f"[Swarm] Command: {cmd}")
+
+    if cmd_data.get("type") == "set_leader":
+        set_leader(cmd_data.get("sysid", 1))
+        return
+
+    active_handlers = [h for h in drone_handlers if h.sysid != "N/A" and h.connection]
+    if not active_handlers:
+        return
+
+    active_handlers.sort(key=lambda h: h.sysid)
+    _active_handlers_ref = active_handlers
+
+    if cmd == "arm":
+        for h in active_handlers:
+            threading.Thread(target=h.arm_drone, daemon=True).start()
+
+    elif cmd == "disarm":
+        _mission_in_progress.clear()
+        for h in active_handlers:
+            threading.Thread(target=h.disarm_drone, daemon=True).start()
+
+    elif cmd == "takeoff":
+        alt = float(cmd_data.get("alt", 5))
+        def _staggered_takeoff():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(TAKEOFF_STAGGER_S)
+                threading.Thread(target=h.takeoff, args=(alt,), daemon=True).start()
+        threading.Thread(target=_staggered_takeoff, daemon=True).start()
+
+    elif cmd == "rtl":
+        _mission_in_progress.clear()
+        for h in active_handlers:
+            threading.Thread(target=h.rtl, daemon=True).start()
+
+    elif cmd == "land":
+        _mission_in_progress.clear()
+        for h in active_handlers:
+            threading.Thread(target=h.land, daemon=True).start()
+
+    elif cmd == "fly_to":
+        # One-click autonomous mission: auto arm/takeoff if on ground, fly in formation, hover & watchdog
+        threading.Thread(
+            target=_autonomous_mission_worker,
+            args=(cmd_data, active_handlers),
+            daemon=True
+        ).start()
+
+
+# ======================== Main Entry Point ========================
 def main():
+    args = parse_args()
+    mode = "sitl" if args.sitl else "real"
+
+    # Start web server first
     try:
         import web_server
-        import webbrowser
-        import sys
-        
-        # Start web server
         web_server.start_server()
-        
-        # Redirect stdout
         sys.stdout = LoggerTee(sys.stdout, web_server.broadcast_log)
     except Exception as e:
         print(f"Failed to start web server: {e}")
 
-    dialog = ConnectionDialog()
-    config = dialog.run()
-    
-    if not config:
-        print("Cancelled")
-        return
+    # Connect drones
+    drone_list, shared_connections = connect_drones(mode, args.drones, baud=args.baud)
 
-    mode, com, baud = config
-    
-    shared_connections = []
-    
-    if mode == "SIM":
-        drones_data, _ = scan_for_drones_sim()
-    else:
-        drones_data, shared_connections = scan_for_drones_real(com, baud)
-    
-    root = tk.Tk()
-    connected_count = sum(1 for d in drones_data if d is not None)
-    root.title(f"Multi-Drone Ground Control Station - {mode} MODE")
-    root.state('zoomed')
-    root.configure(bg=COLORS['bg_dark'])
+    if not drone_list:
+        print("No drones found. Exiting.")
+        sys.exit(1)
 
-    # Title bar
-    title_bar = tk.Frame(root, bg=COLORS['bg_header'], height=50)
-    title_bar.pack(fill="x", padx=0, pady=0)
-    
-    title_label = tk.Label(
-        title_bar,
-        text="MULTI-DRONE GROUND CONTROL STATION",
-        font=("Consolas", 16, "bold"),
-        bg=COLORS['bg_header'],
-        fg=COLORS['accent_cyan']
-    )
-    title_label.pack(side="left", padx=20, pady=10)
-    
-    # Buttons Frame in Title Bar
-    btn_frame = tk.Frame(title_bar, bg=COLORS['bg_header'])
-    btn_frame.pack(side="right", padx=10)
-    
-    # Launch Map Button
-    def launch_map():
-        import webbrowser
-        webbrowser.open("http://localhost:8000")
-        
-    tk.Button(
-        btn_frame,
-        text="LAUNCH 3D MAP",
-        command=launch_map,
-        bg=COLORS['accent_blue'],
-        fg='white',
-        font=("Consolas", 10, "bold"),
-        relief="flat",
-        padx=10
-    ).pack(side="left", padx=10)
-    
-    status_label = tk.Label(
-        title_bar,
-        text=f"● {connected_count} DRONES CONNECTED ({mode})",
-        font=("Consolas", 12),
-        bg=COLORS['bg_header'],
-        fg=COLORS['status_good'] if connected_count > 0 else COLORS['status_critical']
-    )
-    status_label.pack(side="right", padx=20, pady=10)
+    # Broadcast initial status
+    try:
+        from web_server import broadcast_status
+        broadcast_status({
+            "mode": mode.upper(),
+            "drone_count": len(drone_list),
+            "leader": 1,
+        })
+    except ImportError:
+        pass
 
-    # Main content area with scrollable frame if needed
-    content_frame = tk.Frame(root, bg=COLORS['bg_dark'])
-    content_frame.pack(fill="both", expand=True, padx=5, pady=5)
-
-    # Create 4x2 grid layout
-    top_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
-    top_frame.pack(fill="both", expand=True)
-    bottom_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
-    bottom_frame.pack(fill="both", expand=True)
-
+    # Build handlers
     drone_handlers = []
-    
-    for i, data in enumerate(drones_data):
-        if data:
-            sysid = data['sysid']
-            conn = data['connection']
-        else:
-            sysid = "N/A"
-            conn = None
-        
-        container = top_frame if i < 4 else bottom_frame
-        handler = DroneHandler(sysid, conn, container)
-        drone_handlers.append(handler)
-    
-    # --- Swarm Logic ---
-    def perform_swarm_command(cmd_data):
-        cmd = cmd_data.get("cmd")
-        print(f"Received Swarm Command: {cmd}")
-        formation = cmd_data.get("formation", False)
-        
-        # Filter active drones
-        active_handlers = [h for h in drone_handlers if h.sysid != "N/A"]
-        if not active_handlers: return
-        
-        # Sort by SysID for consistent formation
-        active_handlers.sort(key=lambda h: h.sysid)
-        
-        # Helper for common commands
-        if cmd == "arm":
-            for h in active_handlers: h.arm_drone()
-        elif cmd == "disarm":
-            for h in active_handlers: h.disarm_drone()
-        elif cmd == "takeoff":
-            alt = float(cmd_data.get("alt", 5))
-            for h in active_handlers: h.takeoff(alt)
-        elif cmd == "rtl":
-            for h in active_handlers: h.rtl()
-        elif cmd == "land":
-            for h in active_handlers: h.land()
-        elif cmd == "fly_to":
+
+    if args.control:
+        # GUI mode
+        DroneHandler, COLORS = _build_gui_handler_class()
+        import tkinter as tk
+
+        root = tk.Tk()
+        connected_count = len(drone_list)
+        root.title(f"Multi-Drone Ground Control Station – {mode.upper()} MODE")
+        root.state("zoomed")
+        root.configure(bg=COLORS['bg_dark'])
+
+        # Title bar
+        title_bar = tk.Frame(root, bg=COLORS['bg_header'], height=50)
+        title_bar.pack(fill="x")
+
+        tk.Label(
+            title_bar,
+            text="MULTI-DRONE GROUND CONTROL STATION",
+            font=("Consolas", 16, "bold"),
+            bg=COLORS['bg_header'], fg=COLORS['accent_cyan'],
+        ).pack(side="left", padx=20, pady=10)
+
+        btn_frame = tk.Frame(title_bar, bg=COLORS['bg_header'])
+        btn_frame.pack(side="right", padx=10)
+
+        def _launch_map():
+            _open_dashboard()
+
+        tk.Button(
+            btn_frame, text="LAUNCH 3D MAP", command=_launch_map,
+            bg=COLORS['accent_blue'], fg="white",
+            font=("Consolas", 10, "bold"), relief="flat", padx=10,
+        ).pack(side="left", padx=10)
+
+        tk.Label(
+            title_bar,
+            text=f"● {connected_count} DRONES CONNECTED ({mode.upper()})",
+            font=("Consolas", 12),
+            bg=COLORS['bg_header'],
+            fg=COLORS['status_good'] if connected_count > 0 else COLORS['status_critical'],
+        ).pack(side="right", padx=20, pady=10)
+
+        content_frame = tk.Frame(root, bg=COLORS['bg_dark'])
+        content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        top_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
+        top_frame.pack(fill="both", expand=True)
+        bottom_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
+        bottom_frame.pack(fill="both", expand=True)
+
+        for i, data in enumerate(drone_list):
+            sysid = data["sysid"]
+            conn = data["connection"]
+            container = top_frame if i < 4 else bottom_frame
+            handler = DroneHandler(sysid, conn, container)
+            drone_handlers.append(handler)
+            data["handler"] = handler
+
+        # Fill remaining slots with empty panels (up to 8)
+        for i in range(len(drone_list), 8):
+            container = top_frame if i < 4 else bottom_frame
+            h = DroneHandler("N/A", None, container)
+            drone_handlers.append(h)
+
+    else:
+        # Headless mode – BaseDroneHandler only
+        for data in drone_list:
+            handler = BaseDroneHandler(data["sysid"], data["connection"])
+            drone_handlers.append(handler)
+            data["handler"] = handler
+
+    # Register swarm command callback
+    try:
+        from web_server import set_command_callback
+        set_command_callback(lambda msg: perform_swarm_command(msg, drone_handlers))
+    except ImportError:
+        pass
+
+    # Start connection watchdog
+    start_watchdog(drone_list, mode, args.baud)
+
+    # Optionally open browser
+    if not args.no_browser:
+        try:
+            _open_dashboard()
+        except Exception:
+            pass
+
+    if args.control:
+        try:
+            root.mainloop()
+        except KeyboardInterrupt:
+            pass
+    else:
+        print(f"[SwarmControl] Running in headless mode. Web dashboard: {WEB_DASH_URL}")
+        print("Press Ctrl+C to quit.")
+        _shutdown = threading.Event()
+        try:
+            _shutdown.wait()  # blocks efficiently until interrupted
+        except KeyboardInterrupt:
+            pass
+
+    # Cleanup
+    print("Shutting down...")
+    for data in drone_list:
+        conn = data.get("connection")
+        if conn and not isinstance(conn, VirtualConnection):
             try:
-                lat = float(cmd_data.get("lat"))
-                lon = float(cmd_data.get("lon"))
-                alt = float(cmd_data.get("alt"))
-                
-                if formation and len(active_handlers) > 1:
-                    # Leader (lowest ID) goes to target
-                    leader = active_handlers[0]
-                    leader.fly_to_gps(lat, lon, alt)
-                    
-                    # Followers
-                    for i, h in enumerate(active_handlers[1:]):
-                        # idx 0 is first follower
-                        idx = i 
-                        row = (idx // 2) + 1
-                        
-                        # Even index in followers array (Drone 2, 4...) -> Right (+), Odd -> Left (-)
-                        # Note: idx=0 (Drone 2) -> Side Right. idx=1 (Drone 3) -> Side Left.
-                        side = 1 if idx % 2 == 0 else -1
-                        
-                        # Offsets (approx in degrees)
-                        # 1 deg lat ~ 111km -> 1m ~ 0.000009 deg
-                        # 10m spacing
-                        d_lat = -0.00010 * row # Behind
-                        d_lon = 0.00015 * row * side # Side
-                        
-                        target_lat = lat + d_lat
-                        target_lon = lon + d_lon
-                        
-                        h.fly_to_gps(target_lat, target_lon, alt)
-                else:
-                    # All to same point
-                    for h in active_handlers:
-                        h.fly_to_gps(lat, lon, alt)
-            except Exception as e:
-                print(f"Error in fly_to: {e}")
+                conn.close()
+            except Exception:
+                pass
+    for sc in shared_connections:
+        sc.close()
 
-    # Register callback
-    try:
-        import web_server
-        web_server.set_command_callback(perform_swarm_command)
-    except:
-        pass
-
-    try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        print("Closing connections...")
-        # Close virtual connections? They don't restrict closes but let's be safe
-        for data in drones_data:
-            if data and data['connection']:
-                # If it's a TCP socket it needs closing
-                # If it's a VirtualConnection, we just let it be, SharedConnection cleanup handles it
-                if hasattr(data['connection'], 'close') and not isinstance(data['connection'], VirtualConnection):
-                    data['connection'].close()
-        
-        # Close shared connections
-        for sc in shared_connections:
-            sc.close()
 
 if __name__ == "__main__":
     main()
