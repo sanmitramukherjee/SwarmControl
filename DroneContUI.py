@@ -36,6 +36,8 @@ COLLISION_ALT_STEP_M = 2.5
 TAKEOFF_STAGGER_S    = 1.5
 # Inactivity timeout (seconds) before hovering drones RTL
 INACTIVITY_RTL_TIMEOUT_S = 30.0
+# Minimum interval (seconds) between sequential command dispatches on a shared serial bus
+SERIAL_DISPATCH_SPACING_S = 0.25
 
 # ======================== CLI Argument Parsing ========================
 def parse_args():
@@ -211,7 +213,8 @@ class SharedConnection:
         self.master = mavutil.mavlink_connection(connection_string, baud=baud)
         self.buffers = {}  # {sysid: [messages]}
         self.stop_event = threading.Event()
-        self.lock = threading.Lock()
+        self.buffer_lock = threading.Lock()
+        self.write_lock = threading.Lock()
 
         self.thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.thread.start()
@@ -222,7 +225,7 @@ class SharedConnection:
                 msg = self.master.recv_match(blocking=True, timeout=1.0)
                 if msg:
                     sysid = msg.get_srcSystem()
-                    with self.lock:
+                    with self.buffer_lock:
                         if sysid not in self.buffers:
                             self.buffers[sysid] = []
                         self.buffers[sysid].append(msg)
@@ -234,7 +237,7 @@ class SharedConnection:
     def get_message(self, sysid, type_filter=None, blocking=False, timeout=None):
         start_time = time.time()
         while True:
-            with self.lock:
+            with self.buffer_lock:
                 if sysid in self.buffers and self.buffers[sysid]:
                     if type_filter:
                         for i, m in enumerate(self.buffers[sysid]):
@@ -249,7 +252,8 @@ class SharedConnection:
             time.sleep(0.01)
 
     def write(self, buf):
-        self.master.write(buf)
+        with self.write_lock:
+            self.master.write(buf)
 
     def close(self):
         self.stop_event.set()
@@ -950,8 +954,10 @@ def _autonomous_mission_worker(cmd_data, active_handlers):
                 stagger_alt = target_alt + (i * COLLISION_ALT_STEP_M if len(active_handlers) > 1 else 0)
                 drone_target_map[h] = (lat, lon, stagger_alt)
 
-        # Step 4: Dispatch fly_to commands
-        for h, (t_lat, t_lon, t_alt) in drone_target_map.items():
+        # Step 4: Dispatch fly_to commands with staggered bus spacing
+        for i, (h, (t_lat, t_lon, t_alt)) in enumerate(drone_target_map.items()):
+            if i > 0:
+                time.sleep(SERIAL_DISPATCH_SPACING_S)
             threading.Thread(target=h.fly_to_gps, args=(t_lat, t_lon, t_alt), daemon=True).start()
 
         # Step 5: Monitor horizontal progress until arrived (within 2.5m)
@@ -1003,13 +1009,21 @@ def perform_swarm_command(cmd_data, drone_handlers):
     _active_handlers_ref = active_handlers
 
     if cmd == "arm":
-        for h in active_handlers:
-            threading.Thread(target=h.arm_drone, daemon=True).start()
+        def _staggered_arm():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(SERIAL_DISPATCH_SPACING_S)
+                threading.Thread(target=h.arm_drone, daemon=True).start()
+        threading.Thread(target=_staggered_arm, daemon=True).start()
 
     elif cmd == "disarm":
         _mission_in_progress.clear()
-        for h in active_handlers:
-            threading.Thread(target=h.disarm_drone, daemon=True).start()
+        def _staggered_disarm():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(SERIAL_DISPATCH_SPACING_S)
+                threading.Thread(target=h.disarm_drone, daemon=True).start()
+        threading.Thread(target=_staggered_disarm, daemon=True).start()
 
     elif cmd == "takeoff":
         alt = float(cmd_data.get("alt", 5))
@@ -1022,13 +1036,21 @@ def perform_swarm_command(cmd_data, drone_handlers):
 
     elif cmd == "rtl":
         _mission_in_progress.clear()
-        for h in active_handlers:
-            threading.Thread(target=h.rtl, daemon=True).start()
+        def _staggered_rtl():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(SERIAL_DISPATCH_SPACING_S)
+                threading.Thread(target=h.rtl, daemon=True).start()
+        threading.Thread(target=_staggered_rtl, daemon=True).start()
 
     elif cmd == "land":
         _mission_in_progress.clear()
-        for h in active_handlers:
-            threading.Thread(target=h.land, daemon=True).start()
+        def _staggered_land():
+            for i, h in enumerate(active_handlers):
+                if i > 0:
+                    time.sleep(SERIAL_DISPATCH_SPACING_S)
+                threading.Thread(target=h.land, daemon=True).start()
+        threading.Thread(target=_staggered_land, daemon=True).start()
 
     elif cmd == "fly_to":
         # One-click autonomous mission: auto arm/takeoff if on ground, fly in formation, hover & watchdog
