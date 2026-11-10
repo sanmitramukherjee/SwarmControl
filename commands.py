@@ -26,32 +26,24 @@ def takeoff(connection, systemID, altitude):
     connection.mav.command_long_send(systemID, 1,
         mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, altitude)
 
-def fly_to_gps(connection, systemID, lat, lon, alt, use_msl=False):
-    """Fly to GPS coordinates.
+def fly_to_gps(connection, systemID, lat, lon, alt):
+    """Fly to GPS coordinates using relative altitude AGL.
 
     Args:
         connection: MAVLink connection object (mavlink_connection or VirtualConnection).
         systemID:   Target drone system ID.
         lat:        Target latitude in decimal degrees.
         lon:        Target longitude in decimal degrees.
-        alt:        Target altitude in metres.
-        use_msl:    When True, altitude is treated as MSL (MAV_FRAME_GLOBAL_INT).
-                    When False (default), altitude is relative to home
-                    (MAV_FRAME_GLOBAL_RELATIVE_ALT_INT).
+        alt:        Target relative altitude (AGL) in metres.
     """
-    frame = (
-        mavutil.mavlink.MAV_FRAME_GLOBAL_INT
-        if use_msl
-        else mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
-    )
+    frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
     print(f"[Drone {systemID}] Switching to GUIDED for Mission...")
     connection.mav.set_mode_send(
         systemID,
         mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
         4  # 4 = GUIDED for ArduCopter
     )
-    frame_label = "MSL" if use_msl else "REL"
-    print(f"[Drone {systemID}] Flying to {lat}, {lon}, {alt}m ({frame_label})...")
+    print(f"[Drone {systemID}] Flying to {lat}, {lon}, {alt}m (REL)...")
     connection.mav.set_position_target_global_int_send(
         0, systemID, 1,
         frame,

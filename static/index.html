@@ -492,7 +492,7 @@
     const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
     const DRONE_LIST_UPDATE_MS     = 200;    // throttle drone-list DOM updates (ms)
     // 3D scene distance (metres) that triggers the collision warning
-    const COLLISION_WARN_M         = 5.0;
+    const COLLISION_WARN_M         = 1.5;
     // Three.js hex colours for drone body material
     const DRONE_NORMAL_COLOR       = 0x00d4ff;
     const DRONE_COLLISION_COLOR    = 0xff2222;
@@ -587,7 +587,7 @@
     }
 
     // ======================== Status Sync ========================
-    let currentLeaderSysid = -1;  // -1 = auto
+    let currentLeaderSysid = 1;  // Hardcoded default leader is Drone 1
 
     function applyStatus(data) {
       if (data.mode !== undefined) {
