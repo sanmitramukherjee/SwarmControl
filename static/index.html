@@ -419,9 +419,9 @@
               <div>
                 <label class="ctrl-label">FORMATION</label>
                 <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
-                  <option value="off">OFF</option>
-                  <option value="V">V-SHAPE</option>
+                  <option value="V" selected>V-SHAPE</option>
                   <option value="line">LINE</option>
+                  <option value="off">OFF</option>
                 </select>
               </div>
               <div>
@@ -631,6 +631,10 @@
         }
       });
       syncLeaderSelect();
+
+      // Ensure formation indicator reflects the default V-shape on load
+      const fType = document.getElementById('formation-type').value;
+      document.getElementById('sb-formation-val').textContent = fType !== 'off' ? fType : 'OFF';
     }
 
     // ======================== Formation Control ========================
@@ -792,6 +796,13 @@
         for (let j = i + 1; j < ids.length; j++) {
           const pi = drones[ids[i]].mesh.position;
           const pj = drones[ids[j]].mesh.position;
+          const ti = drones[ids[i]].telemetry;
+          const tj = drones[ids[j]].telemetry;
+
+          // Don't trigger false collision alarms while drones are still sitting on the ground (< 1m alt)
+          const isAirborne = (ti && ti.alt > 1.0) || (tj && tj.alt > 1.0);
+          if (!isAirborne) continue;
+
           // distanceTo gives true 3D Euclidean distance (Y = altitude in scene metres)
           const dist = pi.distanceTo(pj);
 
@@ -847,20 +858,20 @@
       const mat = new THREE.MeshPhongMaterial({
         color: DRONE_NORMAL_COLOR, emissive: DRONE_NORMAL_EMISSIVE, emissiveIntensity: 0.5
       });
-      group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 1), mat));
+      group.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.5), mat));
 
       const armMat = new THREE.MeshBasicMaterial({ color: 0x555555 });
-      const armGeom = new THREE.BoxGeometry(3, 0.1, 0.2);
+      const armGeom = new THREE.BoxGeometry(1.2, 0.05, 0.1);
       const arm1 = new THREE.Mesh(armGeom, armMat); arm1.rotation.y = Math.PI / 4;
       const arm2 = new THREE.Mesh(armGeom, armMat); arm2.rotation.y = -Math.PI / 4;
       group.add(arm1); group.add(arm2);
 
       const propGroup = new THREE.Group();
-      const propGeom = new THREE.CylinderGeometry(0.8, 0.8, 0.05, 8);
+      const propGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.02, 8);
       const propMat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.8 });
-      [{ x: 1, z: 1 }, { x: -1, z: -1 }, { x: 1, z: -1 }, { x: -1, z: 1 }].forEach(p => {
+      [{ x: 0.42, z: 0.42 }, { x: -0.42, z: -0.42 }, { x: 0.42, z: -0.42 }, { x: -0.42, z: 0.42 }].forEach(p => {
         const prop = new THREE.Mesh(propGeom, propMat);
-        prop.position.set(p.x, 0.2, p.z);
+        prop.position.set(p.x, 0.1, p.z);
         propGroup.add(prop);
       });
       group.add(propGroup);
@@ -875,8 +886,8 @@
       const sprite = new THREE.Sprite(
         new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lCanvas) })
       );
-      sprite.position.y = 2.5;
-      sprite.scale.set(4, 2, 1);
+      sprite.position.y = 1.2;
+      sprite.scale.set(2, 1, 1);
       group.add(sprite);
 
       group.position.set(0, 0, 0);
@@ -915,13 +926,10 @@
           const lonDiff = t.lon - window.homeRef.lon;
           const cosLat = Math.cos(window.homeRef.lat * Math.PI / 180);
 
-          // Use MSL altitude for 3D positioning, offset by home MSL so Y=0 at ground
-          const homeAltMsl = (t.home_alt !== undefined) ? t.home_alt : 0;
+          // Position in 3D scene (X = East, Z = South, Y = Altitude AGL)
           const x = lonDiff * 111320 * cosLat;
           const z = -latDiff * 110574;
-          const y = (t.alt_msl !== undefined && t.alt_msl !== 0)
-            ? t.alt_msl - homeAltMsl
-            : t.alt;
+          const y = (t.alt !== undefined) ? t.alt : 0;
 
           drones[sysid].mesh.position.set(x, Math.max(0, y), z);
           drones[sysid].mesh.rotation.x = t.pitch * (Math.PI / 180);
