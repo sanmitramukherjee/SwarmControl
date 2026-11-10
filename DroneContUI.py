@@ -1036,10 +1036,24 @@ def perform_swarm_command(cmd_data, drone_handlers):
 
     elif cmd == "rtl":
         _mission_in_progress.clear()
+        print(f"[Swarm] Executing RTL with vertical stagger ({COLLISION_ALT_STEP_M}m step)...")
         def _staggered_rtl():
             for i, h in enumerate(active_handlers):
                 if i > 0:
                     time.sleep(SERIAL_DISPATCH_SPACING_S)
+                # Stagger RTL return altitude to prevent mid-air collision during transit/descent
+                stagger_rtl_alt = 10.0 + (i * COLLISION_ALT_STEP_M)
+                try:
+                    # Set RTL_ALT parameter per drone (in cm: 10m = 1000cm, 12.5m = 1250cm, etc.)
+                    h.connection.mav.param_set_send(
+                        h.sysid,
+                        h.connection.target_component,
+                        b"RTL_ALT\x00\x00\x00\x00\x00\x00\x00\x00",
+                        float(stagger_rtl_alt * 100),
+                        mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+                    )
+                except Exception:
+                    pass
                 threading.Thread(target=h.rtl, daemon=True).start()
         threading.Thread(target=_staggered_rtl, daemon=True).start()
 
