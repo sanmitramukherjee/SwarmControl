@@ -29,6 +29,37 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 
 ---
 
+## Launch Instructions
+
+Run these commands from the project directory after `uv sync`.
+
+### Start with SITL
+
+Start one command-line instance for each running SITL drone. For example, if the instances listen on ports `5762` and `5772`:
+
+```bash
+uv run DroneContUI.py --sitl --drones 5762 5772
+```
+
+### Connect to real drones
+
+List each serial port and its configured MAVLink system ID as `PORT:SYSID`:
+
+```bash
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
+```
+
+Replace `COM3` and the system IDs with the values for your telemetry link and flight controllers.
+
+### Open the dashboard or cockpit
+
+The application starts its HTTP dashboard on port `8000` and its WebSocket service on port `8001`. After the drones connect, it opens the dashboard in your default browser at [http://localhost:8000/index.html](http://localhost:8000/index.html).
+
+- Add `--control` to open the optional Tkinter cockpit alongside the web dashboard.
+- Add `--no-browser` to keep the dashboard server running without opening a browser tab. Open the dashboard URL above manually.
+
+---
+
 ## CLI Options & Usage Guide
 
 ```text
