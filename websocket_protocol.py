@@ -5,12 +5,12 @@ class WebSocketProtocol:
     def parse_headers(self, data):
         headers = {}
         try:
-            lines = data.decode('utf-8').split('\r\n')
+            lines = data.decode("utf-8").split("\r\n")
         except Exception:
             return headers
         for line in lines[1:]:
-            if ': ' in line:
-                key, _, val = line.partition(': ')
+            if ": " in line:
+                key, _, val = line.partition(": ")
                 headers[key] = val
         return headers
 
@@ -39,23 +39,21 @@ class WebSocketProtocol:
             if masked:
                 if len(data) < idx + 4 + length:
                     return None, data
-                masks = data[idx: idx + 4]
+                masks = data[idx : idx + 4]
                 idx += 4
-                decoded = bytearray(
-                    data[idx + i] ^ masks[i % 4] for i in range(length)
-                )
+                decoded = bytearray(data[idx + i] ^ masks[i % 4] for i in range(length))
             else:
                 if len(data) < idx + length:
                     return None, data
-                decoded = data[idx: idx + length]
+                decoded = data[idx : idx + length]
 
-            remaining = data[idx + length:]
-            return decoded.decode('utf-8'), remaining
+            remaining = data[idx + length :]
+            return decoded.decode("utf-8"), remaining
         except Exception:
             return None, b""
 
     def encode_frame(self, message):
-        data = message.encode('utf-8')
+        data = message.encode("utf-8")
         length = len(data)
         frame = bytearray([0x81])
 

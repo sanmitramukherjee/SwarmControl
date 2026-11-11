@@ -3,7 +3,8 @@ import threading
 import time
 
 from pymavlink import mavutil
-from commands import arm_drone, takeoff, land, rtl, fly_to_gps, disarm_drone
+
+from commands import arm_drone, disarm_drone, fly_to_gps, land, rtl, takeoff
 
 from .config import DATA_STREAM_RATE_HZ
 
@@ -22,9 +23,9 @@ class BaseDroneHandler:
 
         self.lat = 0.0
         self.lon = 0.0
-        self.current_alt = 0.0   # relative to home (AGL)
-        self.alt_msl = 0.0       # MSL altitude
-        self.home_alt = None     # MSL alt at first valid fix
+        self.current_alt = 0.0  # relative to home (AGL)
+        self.alt_msl = 0.0  # MSL altitude
+        self.home_alt = None  # MSL alt at first valid fix
 
         self.last_heartbeat = 0.0
         self.armed = False
@@ -75,26 +76,29 @@ class BaseDroneHandler:
             self.home_alt = self.alt_msl - self.current_alt
             print(f"[Drone {self.sysid}] Home alt: {self.home_alt:.2f}m MSL")
 
-        h_speed = math.sqrt(msg.vx ** 2 + msg.vy ** 2) / 100.0
+        h_speed = math.sqrt(msg.vx**2 + msg.vy**2) / 100.0
         v_speed = -(msg.vz / 100.0)
 
         try:
             from web_server import broadcast_telemetry
-            broadcast_telemetry({
-                self.sysid: {
-                    "lat": self.lat,
-                    "lon": self.lon,
-                    "alt": self.current_alt,
-                    "alt_msl": self.alt_msl,
-                    "home_alt": self.home_alt if self.home_alt is not None else 0.0,
-                    "pitch": self.pitch,
-                    "roll": self.roll,
-                    "yaw": self.yaw,
-                    "h_speed": h_speed,
-                    "v_speed": v_speed,
-                    "armed": self.armed,
+
+            broadcast_telemetry(
+                {
+                    self.sysid: {
+                        "lat": self.lat,
+                        "lon": self.lon,
+                        "alt": self.current_alt,
+                        "alt_msl": self.alt_msl,
+                        "home_alt": self.home_alt if self.home_alt is not None else 0.0,
+                        "pitch": self.pitch,
+                        "roll": self.roll,
+                        "yaw": self.yaw,
+                        "h_speed": h_speed,
+                        "v_speed": v_speed,
+                        "armed": self.armed,
+                    }
                 }
-            })
+            )
         except ImportError:
             pass
 

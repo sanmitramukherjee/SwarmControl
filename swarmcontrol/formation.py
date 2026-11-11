@@ -15,9 +15,12 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     EARTH_RADIUS_M = 6_371_000
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat / 2) ** 2
-         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
-         * math.sin(dlon / 2) ** 2)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
     return EARTH_RADIUS_M * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
@@ -45,8 +48,14 @@ def check_formation_separation(positions_with_alt, min_sep_m=COLLISION_WARN_M):
     return warnings
 
 
-def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
-                                follower_count, pattern="V", spacing_m=10.0):
+def calculate_formation_offsets(
+    leader_lat,
+    leader_lon,
+    leader_heading_deg,
+    follower_count,
+    pattern="V",
+    spacing_m=10.0,
+):
     """
     Compute GPS positions for *follower_count* drones in the requested formation
     relative to the leader.
@@ -82,25 +91,31 @@ def calculate_formation_offsets(leader_lat, leader_lon, leader_heading_deg,
             offset_x = -behind_m * fwd_x + side_m * right_x
             offset_y = -behind_m * fwd_y + side_m * right_y
 
-            positions.append((
-                leader_lat + offset_y / m_per_lat,
-                leader_lon + offset_x / m_per_lon,
-            ))
+            positions.append(
+                (
+                    leader_lat + offset_y / m_per_lat,
+                    leader_lon + offset_x / m_per_lon,
+                )
+            )
 
     elif pattern == "line":
         for i in range(follower_count):
             behind_m = (i + 1) * spacing_m
             offset_x = -behind_m * fwd_x
             offset_y = -behind_m * fwd_y
-            positions.append((
-                leader_lat + offset_y / m_per_lat,
-                leader_lon + offset_x / m_per_lon,
-            ))
+            positions.append(
+                (
+                    leader_lat + offset_y / m_per_lat,
+                    leader_lon + offset_x / m_per_lon,
+                )
+            )
 
     else:
         # Unknown pattern — return empty list so the caller skips unknown followers
         # rather than stacking all drones at the same position (collision hazard).
-        print(f"[Formation] Unknown pattern '{pattern}' – returning no follower positions.")
+        print(
+            f"[Formation] Unknown pattern '{pattern}' – returning no follower positions."
+        )
         positions = []
 
     return positions

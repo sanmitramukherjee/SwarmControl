@@ -23,31 +23,48 @@ def parse_args():
         ),
     )
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--sitl", action="store_true",
-                      help="Connect to SITL drones via TCP localhost")
-    mode.add_argument("--real", action="store_true",
-                      help="Connect to real drones via serial/mesh (COM:SYSID pairs)")
+    mode.add_argument(
+        "--sitl", action="store_true", help="Connect to SITL drones via TCP localhost"
+    )
+    mode.add_argument(
+        "--real",
+        action="store_true",
+        help="Connect to real drones via serial/mesh (COM:SYSID pairs)",
+    )
 
     parser.add_argument(
-        "--drones", nargs="+", required=True,
+        "--drones",
+        nargs="+",
+        required=True,
         metavar="PORT_OR_COM:SYSID",
         help=(
             "SITL: TCP port numbers (e.g. 5762 5772). "
             "Real: COM_PORT:SYSID pairs (e.g. COM3:1 COM3:2)"
         ),
     )
-    parser.add_argument("--control", action="store_true",
-                        help="Launch Tkinter GUI control station alongside the web dashboard")
-    parser.add_argument("--baud", type=int, default=57600,
-                        help="Baud rate for real drone serial connections (default: 57600)")
-    parser.add_argument("--no-browser", action="store_true",
-                        help="Do not auto-open the web dashboard in the default browser")
+    parser.add_argument(
+        "--control",
+        action="store_true",
+        help="Launch Tkinter GUI control station alongside the web dashboard",
+    )
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=57600,
+        help="Baud rate for real drone serial connections (default: 57600)",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open the web dashboard in the default browser",
+    )
     return parser.parse_args()
 
 
 def _open_dashboard():
     """Open the web dashboard with a cache-busting query string."""
     import webbrowser
+
     url = f"{WEB_DASH_URL}?v={int(time.time())}"
     webbrowser.open(url)
 
@@ -75,6 +92,7 @@ def main():
     # Start web server first
     try:
         import web_server
+
         web_server.start_server()
         sys.stdout = LoggerTee(sys.stdout, web_server.broadcast_log)
     except Exception as e:
@@ -90,11 +108,14 @@ def main():
     # Broadcast initial status
     try:
         from web_server import broadcast_status
-        broadcast_status({
-            "mode": mode.upper(),
-            "drone_count": len(drone_list),
-            "leader": 1,
-        })
+
+        broadcast_status(
+            {
+                "mode": mode.upper(),
+                "drone_count": len(drone_list),
+                "leader": 1,
+            }
+        )
     except ImportError:
         pass
 
@@ -110,45 +131,53 @@ def main():
         connected_count = len(drone_list)
         root.title(f"Multi-Drone Ground Control Station – {mode.upper()} MODE")
         root.state("zoomed")
-        root.configure(bg=COLORS['bg_dark'])
+        root.configure(bg=COLORS["bg_dark"])
 
         # Title bar
-        title_bar = tk.Frame(root, bg=COLORS['bg_header'], height=50)
+        title_bar = tk.Frame(root, bg=COLORS["bg_header"], height=50)
         title_bar.pack(fill="x")
 
         tk.Label(
             title_bar,
             text="MULTI-DRONE GROUND CONTROL STATION",
             font=("Consolas", 16, "bold"),
-            bg=COLORS['bg_header'], fg=COLORS['accent_cyan'],
+            bg=COLORS["bg_header"],
+            fg=COLORS["accent_cyan"],
         ).pack(side="left", padx=20, pady=10)
 
-        btn_frame = tk.Frame(title_bar, bg=COLORS['bg_header'])
+        btn_frame = tk.Frame(title_bar, bg=COLORS["bg_header"])
         btn_frame.pack(side="right", padx=10)
 
         def _launch_map():
             _open_dashboard()
 
         tk.Button(
-            btn_frame, text="LAUNCH 3D MAP", command=_launch_map,
-            bg=COLORS['accent_blue'], fg="white",
-            font=("Consolas", 10, "bold"), relief="flat", padx=10,
+            btn_frame,
+            text="LAUNCH 3D MAP",
+            command=_launch_map,
+            bg=COLORS["accent_blue"],
+            fg="white",
+            font=("Consolas", 10, "bold"),
+            relief="flat",
+            padx=10,
         ).pack(side="left", padx=10)
 
         tk.Label(
             title_bar,
             text=f"● {connected_count} DRONES CONNECTED ({mode.upper()})",
             font=("Consolas", 12),
-            bg=COLORS['bg_header'],
-            fg=COLORS['status_good'] if connected_count > 0 else COLORS['status_critical'],
+            bg=COLORS["bg_header"],
+            fg=COLORS["status_good"]
+            if connected_count > 0
+            else COLORS["status_critical"],
         ).pack(side="right", padx=20, pady=10)
 
-        content_frame = tk.Frame(root, bg=COLORS['bg_dark'])
+        content_frame = tk.Frame(root, bg=COLORS["bg_dark"])
         content_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        top_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
+        top_frame = tk.Frame(content_frame, bg=COLORS["bg_dark"])
         top_frame.pack(fill="both", expand=True)
-        bottom_frame = tk.Frame(content_frame, bg=COLORS['bg_dark'])
+        bottom_frame = tk.Frame(content_frame, bg=COLORS["bg_dark"])
         bottom_frame.pack(fill="both", expand=True)
 
         for i, data in enumerate(drone_list):
@@ -175,6 +204,7 @@ def main():
     # Register swarm command callback
     try:
         from web_server import set_command_callback
+
         set_command_callback(lambda msg: perform_swarm_command(msg, drone_handlers))
     except ImportError:
         pass

@@ -1,19 +1,23 @@
-import threading
-import socket
-import sys
-import os
 import base64
 import hashlib
 import json
-import time
+import os
 import queue
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+import socket
+import threading
+import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 from websocket_protocol import WebSocketProtocol
 
 # ---- Configuration constants ----
-OUTBOUND_QUEUE_SIZE = 256   # Max messages buffered for WebSocket broadcast before dropping oldest
-LOG_RATE_LIMIT_HZ   = 10.0  # Max log messages broadcast per second to avoid flooding clients
+OUTBOUND_QUEUE_SIZE = (
+    256  # Max messages buffered for WebSocket broadcast before dropping oldest
+)
+LOG_RATE_LIMIT_HZ = (
+    10.0  # Max log messages broadcast per second to avoid flooding clients
+)
+
 
 # ------------------- lightweight WebSocket Server -------------------
 class WebSocketHandler(WebSocketProtocol):
@@ -54,8 +58,10 @@ class WebSocketHandler(WebSocketProtocol):
                             break
                         try:
                             msg = json.loads(payload)
-                            if CMD_CALLBACK and callable(CMD_CALLBACK) and msg.get("type") in (
-                                "swarm_command", "set_leader"
+                            if (
+                                CMD_CALLBACK
+                                and callable(CMD_CALLBACK)
+                                and msg.get("type") in ("swarm_command", "set_leader")
                             ):
                                 CMD_CALLBACK(msg)
                         except Exception:
@@ -73,15 +79,15 @@ class WebSocketHandler(WebSocketProtocol):
     def send_handshake(self, key):
         guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         accept_key = base64.b64encode(
-            hashlib.sha1((key + guid).encode('utf-8')).digest()
-        ).decode('utf-8')
+            hashlib.sha1((key + guid).encode("utf-8")).digest()
+        ).decode("utf-8")
         response = (
             "HTTP/1.1 101 Switching Protocols\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Accept: {accept_key}\r\n\r\n"
         )
-        self.conn.send(response.encode('utf-8'))
+        self.conn.send(response.encode("utf-8"))
 
     def send_message(self, message):
         try:
@@ -159,7 +165,7 @@ class IntegratedServer:
                 client.send_message(msg)
 
     def _enqueue(self, data_dict):
-        msg = json.dumps(data_dict, separators=(',', ':'))
+        msg = json.dumps(data_dict, separators=(",", ":"))
         try:
             self._out_queue.put_nowait(msg)
         except queue.Full:
@@ -196,8 +202,9 @@ class IntegratedServer:
         now = time.monotonic()
         with self._log_lock:
             elapsed = now - self._log_last_refill
-            self._log_tokens = min(LOG_RATE_LIMIT_HZ,
-                                   self._log_tokens + elapsed * LOG_RATE_LIMIT_HZ)
+            self._log_tokens = min(
+                LOG_RATE_LIMIT_HZ, self._log_tokens + elapsed * LOG_RATE_LIMIT_HZ
+            )
             self._log_last_refill = now
             if self._log_tokens >= 1.0:
                 self._log_tokens -= 1.0

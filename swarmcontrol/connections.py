@@ -60,7 +60,7 @@ class SharedConnection:
         start_time = time.time()
         while True:
             with self.buffer_lock:
-                if sysid in self.buffers and self.buffers[sysid]:
+                if self.buffers.get(sysid):
                     if type_filter:
                         for i, m in enumerate(self.buffers[sysid]):
                             if m.get_type() == type_filter:
@@ -114,7 +114,9 @@ def connect_drones(mode, drone_specs, baud=57600):
                 if msg:
                     sysid = conn.target_system
                     print(f"  ✓ Drone sysid={sysid} on port {port}")
-                    drone_list.append({"sysid": sysid, "connection": conn, "port": port})
+                    drone_list.append(
+                        {"sysid": sysid, "connection": conn, "port": port}
+                    )
                 else:
                     print(f"  ✗ No HEARTBEAT on port {port}")
                     conn.close()
@@ -126,7 +128,9 @@ def connect_drones(mode, drone_specs, baud=57600):
         port_map = {}
         for spec in drone_specs:
             if ":" not in spec:
-                print(f"  Invalid real drone spec '{spec}' (expected COM:SYSID). Skipping.")
+                print(
+                    f"  Invalid real drone spec '{spec}' (expected COM:SYSID). Skipping."
+                )
                 continue
             com, _, sysid_str = spec.rpartition(":")
             try:
@@ -137,14 +141,18 @@ def connect_drones(mode, drone_specs, baud=57600):
             port_map.setdefault(com, []).append(sysid)
 
         for com_port, sysids in port_map.items():
-            print(f"Connecting to real drones on {com_port} @ {baud}bps, sysids={sysids}...")
+            print(
+                f"Connecting to real drones on {com_port} @ {baud}bps, sysids={sysids}..."
+            )
             try:
                 shared_conn = SharedConnection(com_port, baud=baud)
                 shared_connections.append(shared_conn)
                 time.sleep(HEARTBEAT_WAIT_REAL_S)  # Allow heartbeats to arrive
                 for sysid in sysids:
                     v_conn = VirtualConnection(shared_conn, sysid)
-                    drone_list.append({"sysid": sysid, "connection": v_conn, "port": com_port})
+                    drone_list.append(
+                        {"sysid": sysid, "connection": v_conn, "port": com_port}
+                    )
                     print(f"  ✓ Registered sysid={sysid} on {com_port}")
             except Exception as e:
                 print(f"  ✗ Error on {com_port}: {e}")
@@ -157,6 +165,7 @@ def start_watchdog(drone_list, mode, baud):
     Background thread: monitors heartbeat age per drone and attempts reconnection.
     Broadcasts live status to the web dashboard.
     """
+
     def _loop():
         try:
             from web_server import broadcast_log, broadcast_status
@@ -195,8 +204,13 @@ def start_watchdog(drone_list, mode, baud):
                             broadcast_log(
                                 f"[Watchdog] Reconnect failed for drone {sysid}: {e}"
                             )
-                    broadcast_status({
-                        "drone_status": {"sysid": sysid, "connected": age <= HEARTBEAT_TIMEOUT_S}
-                    })
+                    broadcast_status(
+                        {
+                            "drone_status": {
+                                "sysid": sysid,
+                                "connected": age <= HEARTBEAT_TIMEOUT_S,
+                            }
+                        }
+                    )
 
     threading.Thread(target=_loop, daemon=True).start()
