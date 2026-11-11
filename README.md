@@ -7,10 +7,17 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 ## System Requirements & Quick Setup
 
 - **Python**: 3.8+
-- **Automated Setup (Windows)**:
-  Simply double-click `setup_venv.bat` (or run it from PowerShell / CMD). It will automatically create a virtual environment (`venv`), activate it, and install all required packages.
+- **Recommended setup with uv**:
+  Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then sync the project environment from the lockfile:
+  ```bash
+  uv sync
+  uv run DroneContUI.py --sitl --drones 5762 5772
+  ```
 
-- **Manual Setup**:
+- **Legacy Windows setup**:
+  Double-click `setup_venv.bat` (or run it from PowerShell / CMD) to create and populate the `venv` environment.
+
+- **Legacy manual setup**:
   ```bash
   python -m venv venv
   .\venv\Scripts\activate
@@ -25,7 +32,7 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 ## CLI Options & Usage Guide
 
 ```text
-python DroneContUI.py [--sitl | --real] --drones SPEC [SPEC ...] [OPTIONS]
+uv run DroneContUI.py [--sitl | --real] --drones SPEC [SPEC ...] [OPTIONS]
 ```
 
 ### Argument Reference
@@ -52,17 +59,17 @@ When flying 2 physical drones over one telemetry radio (e.g., `COM3`):
 
 #### Command (Standard Web Dashboard):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
 ```
 
 #### Command (With Desktop Tkinter Cockpit UI):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --control
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --control
 ```
 
 #### Command (Headless Server / No Auto-Browser):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
 ```
 
 ---
@@ -73,12 +80,12 @@ Run ArduPilot SITL instances locally (e.g., instance 0 on port 5762, instance 1 
 
 #### Command:
 ```bash
-python DroneContUI.py --sitl --drones 5762 5772
+uv run DroneContUI.py --sitl --drones 5762 5772
 ```
 
 #### Command (With Tkinter GUI):
 ```bash
-python DroneContUI.py --sitl --drones 5762 5772 --control
+uv run DroneContUI.py --sitl --drones 5762 5772 --control
 ```
 
 ---
