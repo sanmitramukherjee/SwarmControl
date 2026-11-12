@@ -1,109 +1,463 @@
+"""Swarm command sequencing and conservative waypoint transition checks."""
+
+import math
 import threading
 import time
 
-from pymavlink import mavutil
-
 from .config import (
-    COLLISION_ALT_STEP_M,
     COLLISION_WARN_M,
     INACTIVITY_RTL_TIMEOUT_S,
+    LAND_TIMEOUT_S,
+    MIN_FORMATION_SPACING_M,
+    NAV_TIMEOUT_S,
     SERIAL_DISPATCH_SPACING_S,
     TAKEOFF_STAGGER_S,
+    TAKEOFF_TIMEOUT_S,
 )
-from .formation import (
-    _haversine_m,
-    calculate_formation_offsets,
-    check_formation_separation,
-)
+from .formation import _haversine_m, calculate_formation_offsets, segment_clear_of_point
 
-# ======================== Swarm Logic ========================
-# Module-level state for swarm
-_leader_sysid = 1  # Hardcoded default leader is Drone 1
+_leader_sysid = 1
 _leader_lock = threading.Lock()
-
-# Mission state & Inactivity watchdog
+_worker_lock = threading.Lock()
+_dispatch_lock = threading.Lock()
+_current_cancel = None
+_current_worker = None
+_current_kind = None
 _mission_in_progress = threading.Event()
 _last_activity_time = time.time()
 _watchdog_thread_started = False
 _active_handlers_ref = []
 
-# Manual follow mode state
-_manual_mode_active = False
-_manual_mode_lock = threading.Lock()
-_manual_thread = None
-_manual_stop_event = threading.Event()
+
+def _log(message):
+    print(message)
+    try:
+        from web_server import broadcast_log
+        broadcast_log(message)
+    except Exception:
+        pass
+
+
+def _manual_status(active):
+    try:
+        from web_server import broadcast_status
+        broadcast_status({"manual_mode": active})
+    except Exception:
+        pass
 
 
 def notify_user_activity():
-    """Reset the 30-second inactivity RTL timer."""
     global _last_activity_time
     _last_activity_time = time.time()
 
 
 def set_leader(sysid):
     global _leader_sysid
+    sysid = int(sysid)
     with _leader_lock:
-        _leader_sysid = int(sysid)
-    print(f"[Swarm] Leader set to drone {sysid}")
+        old_sysid = _leader_sysid
+        changed = _leader_sysid != sysid
+        _leader_sysid = sysid
+    if changed:
+        with _worker_lock:
+            if _current_cancel is not None:
+                _current_cancel.set()
+                _mission_in_progress.clear()
+                to_hold = ([h for h in _active_handlers_ref if h.sysid != old_sysid]
+                           if _current_kind == "manual_mode" else _active_handlers_ref)
+                _hold(to_hold, threading.Event())
+    _log(f"[Swarm] Leader set to drone {sysid}")
     try:
         from web_server import broadcast_status
-
         broadcast_status({"leader": sysid})
-    except ImportError:
+    except (ImportError, RuntimeError):
         pass
 
 
 def get_leader(active_handlers):
-    """Return the leader handler (default SysID 1) from active_handlers."""
     with _leader_lock:
-        lsid = _leader_sysid
-    for h in active_handlers:
-        if h.sysid == lsid:
-            return h
-    # If sysid 1 not present, fallback to first active drone
-    return active_handlers[0] if active_handlers else None
+        chosen = _leader_sysid
+    return next((h for h in active_handlers if h.sysid == chosen),
+                active_handlers[0] if active_handlers else None)
+
+
+def _ordered(active_handlers):
+    leader = get_leader(active_handlers)
+    return [leader] + sorted((h for h in active_handlers if h is not leader),
+                             key=lambda h: h.sysid) if leader else []
+
+
+def _number(value, name, minimum=None):
+    result = float(value)
+    if not math.isfinite(result) or (minimum is not None and result < minimum):
+        raise ValueError(f"{name} must be finite and at least {minimum}")
+    return result
+
+
+def _position(h):
+    lat, lon, alt = float(h.lat), float(h.lon), float(h.current_alt)
+    if not all(map(math.isfinite, (lat, lon, alt))) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError(f"Drone {h.sysid} has invalid position telemetry")
+    if lat == 0.0 and lon == 0.0:
+        raise ValueError(f"Drone {h.sysid} has no valid GPS position")
+    return lat, lon, alt
+
+
+def _landed(h):
+    return not h.armed and math.isfinite(h.current_alt) and h.current_alt <= 0.5
+
+
+def _wait_until(predicate, timeout, cancel):
+    deadline = time.monotonic() + timeout
+    while not cancel.is_set():
+        if predicate():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        cancel.wait(min(0.2, remaining))
+    return False
+
+
+def _call(cancel, h, method, *args, **kwargs):
+    # A new land/RTL/disarm acquires this lock after cancellation, preventing a
+    # cancelled worker from issuing a later navigation command.
+    with _dispatch_lock:
+        if cancel.is_set():
+            return False
+        getattr(h, method)(*args, **kwargs)
+        return True
+
+
+def _hold(handlers, cancel):
+    """Replace outstanding GUIDED waypoints with current-position hover targets."""
+    for h in handlers:
+        if cancel.is_set():
+            return
+        if not h.armed or h.current_alt <= 0.5:
+            continue
+        try:
+            position = _position(h)
+            _call(cancel, h, "fly_to_gps", *position, set_guided=False)
+        except ValueError as exc:
+            _log(f"[Swarm] Could not issue hold to drone {h.sysid}: {exc}")
+
+
+def _start_worker(kind, work):
+    global _current_cancel, _current_worker, _current_kind
+    with _worker_lock:
+        replacing_manual = _current_kind == "manual_mode" and kind != "manual_mode"
+        if _current_cancel is not None:
+            _current_cancel.set()
+        if replacing_manual:
+            _manual_status(False)
+        cancel = threading.Event()
+        _current_cancel = cancel
+        _current_kind = kind
+        _mission_in_progress.set()
+
+        def run():
+            global _current_cancel, _current_worker, _current_kind
+            try:
+                work(cancel)
+            except (ValueError, TypeError) as exc:
+                _log(f"[Swarm] {kind} aborted: {exc}")
+            except Exception as exc:
+                _log(f"[Swarm] {kind} failed: {exc}")
+            finally:
+                with _worker_lock:
+                    if _current_cancel is cancel:
+                        if kind == "manual_mode":
+                            _manual_status(False)
+                        _current_cancel = None
+                        _current_worker = None
+                        _current_kind = None
+                        _mission_in_progress.clear()
+                        notify_user_activity()
+
+        _current_worker = threading.Thread(target=run, daemon=True)
+        _current_worker.start()
+
+
+def _cancel_worker():
+    with _worker_lock:
+        if _current_cancel is not None:
+            _current_cancel.set()
+        _mission_in_progress.clear()
+
+
+def stop_manual_mode():
+    with _worker_lock:
+        if _current_kind != "manual_mode" or _current_cancel is None:
+            return False
+        _current_cancel.set()
+        _mission_in_progress.clear()
+        _hold(_ordered(_active_handlers_ref)[1:], threading.Event())
+        return True
+
+
+def _takeoff_ordered(handlers, altitude, cancel):
+    # The selected leader reaches an airborne hover before any follower launch.
+    leader = handlers[0]
+    for i, h in enumerate(handlers):
+        if cancel.is_set():
+            return False
+        if h.armed and h.current_alt >= max(1.0, altitude - 1.0):
+            continue
+        if i and cancel.wait(TAKEOFF_STAGGER_S):
+            return False
+        if not _call(cancel, h, "takeoff", altitude):
+            return False
+        if not _wait_until(lambda: h.armed and h.current_alt >= max(1.0, altitude - 1.0),
+                           TAKEOFF_TIMEOUT_S, cancel):
+            if cancel.is_set():
+                return False
+            _log(f"[Swarm] Takeoff aborted: drone {h.sysid} did not reach altitude in time; no further drones launched.")
+            return False
+        if i == 0:
+            _log(f"[Swarm] Leader {leader.sysid} airborne; launching followers in order.")
+    return True
+
+
+def _land_ordered(handlers, method, cancel):
+    # Leader must be observed near home and disarmed before follower dispatch.
+    for i, h in enumerate(handlers):
+        if cancel.is_set():
+            return
+        if not _landed(h):
+            if i and cancel.wait(SERIAL_DISPATCH_SPACING_S):
+                return
+            if not _call(cancel, h, method):
+                return
+            if i == 0:
+                # The old mission may have left follower waypoints in the
+                # autopilot. Hold them before waiting for leader touchdown.
+                _hold(handlers[1:], cancel)
+            if not _wait_until(lambda: _landed(h), LAND_TIMEOUT_S, cancel):
+                if cancel.is_set():
+                    return
+                _log(f"[Swarm] {method.upper()} aborted: drone {h.sysid} was not observed grounded and disarmed; later drones remain on hold.")
+                return
+        _log(f"[Swarm] Drone {h.sysid} grounded and disarmed.")
+
+
+def _target_map(cmd_data, handlers, leader, lat, lon, alt):
+    followers = [h for h in handlers if h is not leader]
+    spacing = _number(cmd_data.get("spacing_m", 10.0), "spacing_m", MIN_FORMATION_SPACING_M)
+    result = {leader: (lat, lon, alt)}
+    if cmd_data.get("formation", False):
+        heading = _number(leader.yaw, "leader yaw")
+        offsets = calculate_formation_offsets(lat, lon, heading, len(followers),
+                                              pattern=cmd_data.get("pattern", "V"), spacing_m=spacing)
+        if len(offsets) != len(followers):
+            raise ValueError("unknown formation pattern")
+        result.update((h, (p[0], p[1], alt)) for h, p in zip(followers, offsets))
+    else:
+        # Preserve existing horizontal offsets from the leader when formation is off.
+        # A common waypoint would cause convergence even with altitude staggering.
+        old_leader = _position(leader)
+        for h in followers:
+            old = _position(h)
+            result[h] = (lat + old[0] - old_leader[0], lon + old[1] - old_leader[1], alt)
+    for h, p in result.items():
+        if not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180):
+            raise ValueError(f"target for drone {h.sysid} is outside valid coordinates")
+    return result
+
+
+def _safe_sequential_paths(handlers, targets):
+    """Check each straight horizontal leg against every other drone's hold point.
+
+    Completed drones hold at target; later drones hold at their current position.
+    Real flight dynamics, GPS error, and a moving RC leader are not modeled.
+    """
+    holds = {h: _position(h) for h in handlers}
+    for moving in handlers:
+        start = holds[moving]
+        end = targets[moving]
+        # Horizontal separation is used because relative AGL may have different
+        # home elevations and cannot safely be compared as a common vertical frame.
+        flat_start = (start[0], start[1], 0.0)
+        flat_end = (end[0], end[1], 0.0)
+        for other in handlers:
+            if other is moving:
+                continue
+            hold = holds[other]
+            if not segment_clear_of_point(flat_start, flat_end,
+                                          (hold[0], hold[1], 0.0), COLLISION_WARN_M + 0.5):
+                raise ValueError(f"unsafe path for drone {moving.sysid} near drone {other.sysid}; navigation held")
+        holds[moving] = end
+
+
+def _autonomous_mission_worker(cmd_data, handlers, cancel):
+    lat = _number(cmd_data["lat"], "latitude")
+    lon = _number(cmd_data["lon"], "longitude")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError("target coordinates out of range")
+    alt = _number(cmd_data.get("alt", 5.0), "altitude", 1.0)
+    leader = handlers[0]
+    targets = _target_map(cmd_data, handlers, leader, lat, lon, alt)
+    try:
+        _safe_sequential_paths(handlers, targets)
+    except ValueError:
+        _hold(handlers, cancel)
+        raise
+    if not _takeoff_ordered(handlers, alt, cancel):
+        return
+    # Positions may drift during climb; recheck immediately before navigation.
+    try:
+        _safe_sequential_paths(handlers, targets)
+    except ValueError:
+        _hold(handlers, cancel)
+        raise
+    for h in handlers:
+        if cancel.is_set():
+            return
+        target = targets[h]
+        try:
+            # A completed craft may be up to 0.5m from its planned hold point.
+            # Recheck against live positions before each new leg.
+            live_targets = {other: _position(other) for other in handlers}
+            live_targets[h] = target
+            _safe_sequential_paths(handlers, live_targets)
+        except ValueError:
+            _hold(handlers, cancel)
+            raise
+        if not _call(cancel, h, "fly_to_gps", *target):
+            return
+        if not _wait_until(lambda: _haversine_m(h.lat, h.lon, target[0], target[1]) <= 0.5
+                           and abs(h.current_alt - target[2]) <= 1.0,
+                           NAV_TIMEOUT_S, cancel):
+            if cancel.is_set():
+                return
+            _hold(handlers, cancel)
+            _log(f"[Mission] Navigation aborted: drone {h.sysid} did not arrive in time; remaining drones hold.")
+            return
+    _log("[Mission] Swarm arrived at planned target positions and is hovering.")
+
+
+def _manual_follow_loop(cmd_data, handlers, cancel):
+    leader = handlers[0]
+    followers = handlers[1:]
+    if not followers:
+        raise ValueError("manual mode requires a follower")
+    spacing = _number(cmd_data.get("spacing_m", 10.0), "spacing_m", MIN_FORMATION_SPACING_M)
+    _number(cmd_data.get("alt", 10.0), "altitude", 1.0)
+    formation = bool(cmd_data.get("formation", True))
+    pattern = cmd_data.get("pattern", "V")
+    if formation and pattern not in ("V", "line"):
+        raise ValueError("unknown formation pattern")
+    retained_offsets = None
+    with _worker_lock:
+        if cancel.is_set() or _current_cancel is not cancel:
+            return
+        _manual_status(True)
+    _log("[Manual Mode] Waiting for leader to become armed and airborne.")
+    was_flying = False
+    launched = False
+    while not cancel.is_set():
+        notify_user_activity()
+        flying = leader.armed and leader.current_alt >= 1.0
+        if not flying:
+            if was_flying and _landed(leader):
+                _log("[Manual Mode] Leader grounded and disarmed; landing followers.")
+                _land_ordered(followers, "land", cancel)
+                return
+            cancel.wait(0.2)
+            continue
+        was_flying = True
+        _position(leader)
+        target_alt = _number(leader.current_alt, "leader altitude", 1.0)
+        if not launched:
+            # A vertical launch is unsafe when the current horizontal holds
+            # already overlap; do not start follower takeoff in that case.
+            current_holds = {h: _position(h) for h in handlers}
+            _safe_sequential_paths(handlers, current_holds)
+            for follower in followers:
+                if cancel.is_set():
+                    return
+                if follower.armed and follower.current_alt >= 1.0:
+                    continue
+                if not _call(cancel, follower, "takeoff", target_alt):
+                    return
+                if not _wait_until(lambda f=follower: f.armed and f.current_alt >= max(1.0, target_alt - 1.0),
+                                   TAKEOFF_TIMEOUT_S, cancel):
+                    if cancel.is_set():
+                        return
+                    _log(f"[Manual Mode] Follower {follower.sysid} did not reach hover altitude; follow aborted.")
+                    return
+            launched = True
+        if formation:
+            heading = _number(leader.yaw, "leader yaw")
+            offsets = calculate_formation_offsets(leader.lat, leader.lon, heading,
+                                                  len(followers), pattern, spacing)
+            targets = {h: (p[0], p[1], target_alt) for h, p in zip(followers, offsets)}
+        else:
+            if retained_offsets is None:
+                for follower in followers:
+                    _position(follower)
+                retained_offsets = {h: (h.lat - leader.lat, h.lon - leader.lon)
+                                    for h in followers}
+            targets = {h: (leader.lat + retained_offsets[h][0],
+                           leader.lon + retained_offsets[h][1], target_alt)
+                       for h in followers}
+        if any(not (-90 <= target[0] <= 90 and -180 <= target[1] <= 180)
+               for target in targets.values()):
+            raise ValueError("manual follower target is outside valid coordinates")
+        # Dispatch one follower at a time. The next leg is checked only after
+        # the previous follower has reached a 0.5m hold circle.
+        for follower in followers:
+            if cancel.is_set() or not leader.armed or leader.current_alt < 1.0:
+                break
+            try:
+                live_targets = {h: _position(h) for h in handlers}
+                live_targets[follower] = targets[follower]
+                _safe_sequential_paths(handlers, live_targets)
+            except ValueError as exc:
+                _hold(followers, cancel)
+                _log(f"[Manual Mode] Holding followers: {exc}")
+                break
+            _call(cancel, follower, "fly_to_gps", *targets[follower], set_guided=False)
+            def reached_or_leader_landed():
+                if not leader.armed or leader.current_alt < 1.0:
+                    return True
+                # RC leader can move during the leg; reject an observed new
+                # crossing instead of waiting blindly on the old safe plan.
+                live = {h: _position(h) for h in handlers}
+                live[follower] = targets[follower]
+                _safe_sequential_paths(handlers, live)
+                return _haversine_m(follower.lat, follower.lon,
+                                    targets[follower][0], targets[follower][1]) <= 0.5
+
+            try:
+                arrived = _wait_until(reached_or_leader_landed, NAV_TIMEOUT_S, cancel)
+            except ValueError as exc:
+                _hold(followers, cancel)
+                _log(f"[Manual Mode] Holding followers after leader movement: {exc}")
+                return
+            if not arrived:
+                if cancel.is_set():
+                    return
+                _hold(followers, cancel)
+                _log(f"[Manual Mode] Follower {follower.sysid} did not reach target; follow aborted.")
+                return
+            if cancel.wait(SERIAL_DISPATCH_SPACING_S):
+                return
+        cancel.wait(0.5)
 
 
 def _inactivity_watchdog_loop():
-    """Background watchdog: if drones are airborne/hovering and inactive for 30s, RTL.
-    DOES NOT fire when a drone is actively climbing or navigating to a target.
-    """
-    global _last_activity_time
     while True:
         time.sleep(1.0)
-        # Check if mission is currently in progress (flying/climbing)
         if _mission_in_progress.is_set():
-            _last_activity_time = time.time()
+            notify_user_activity()
             continue
-
-        active = [h for h in _active_handlers_ref if h.sysid != "N/A" and h.connection]
-        # Only trigger if at least one drone is armed and airborne (alt > 1.0m)
-        airborne_drones = [h for h in active if h.armed and h.current_alt > 1.0]
-        if not airborne_drones:
-            _last_activity_time = time.time()
-            continue
-
-        idle_seconds = time.time() - _last_activity_time
-        if idle_seconds >= INACTIVITY_RTL_TIMEOUT_S:
-            print(
-                f"[Watchdog] Inactivity timeout ({idle_seconds:.1f}s >= {INACTIVITY_RTL_TIMEOUT_S}s). "
-                f"Hovering drones initiating automatic RTL."
-            )
-            try:
-                from web_server import broadcast_log
-
-                broadcast_log(
-                    f"[AUTO-RTL] Inactivity timeout ({INACTIVITY_RTL_TIMEOUT_S:.0f}s with no commands). "
-                    f"Swarm returning to launch."
-                )
-            except Exception:
-                pass
-
-            for h in airborne_drones:
-                threading.Thread(target=h.rtl, daemon=True).start()
-
-            # Reset timer so it doesn't repeatedly spam RTL
-            _last_activity_time = time.time()
+        active = [h for h in _active_handlers_ref if h.connection and h.sysid != "N/A"]
+        if not any(h.armed and h.current_alt > 1.0 for h in active):
+            notify_user_activity()
+        elif time.time() - _last_activity_time >= INACTIVITY_RTL_TIMEOUT_S:
+            _log("[AUTO-RTL] Inactivity timeout; returning swarm to launch.")
+            perform_swarm_command({"cmd": "rtl"}, active)
 
 
 def _start_inactivity_watchdog():
@@ -113,423 +467,39 @@ def _start_inactivity_watchdog():
         threading.Thread(target=_inactivity_watchdog_loop, daemon=True).start()
 
 
-def _manual_follow_loop(cmd_data, active_handlers):
-    """Background worker for Manual Mode.
-
-    RULE: Slaves ONLY launch and follow IF Master is armed AND airborne (> 1.0m AGL).
-    If Master is disarmed or on the ground, slaves remain on standby / hold position.
-    When Master takes off, slaves auto-arm and climb to match Master's target altitude.
-    """
-    global _last_activity_time
-    _mission_in_progress.set()
-
-    formation = cmd_data.get("formation", True)
-    pattern = cmd_data.get("pattern", "V")
-    spacing_m = float(cmd_data.get("spacing_m", 10.0))
-    # User-specified target altitude from UI panel (defaults to 10 if not set)
-    ui_target_alt = float(cmd_data.get("alt") or 10.0)
-
-    try:
-        from web_server import broadcast_log, broadcast_status
-    except ImportError:
-        broadcast_log = None
-        broadcast_status = None
-
-    if broadcast_log:
-        broadcast_log("[Manual Mode] Standby: Waiting for Master to arm and take off...")
-    if broadcast_status:
-        broadcast_status({"manual_mode": True})
-
-    leader = get_leader(active_handlers)
-    followers = [h for h in active_handlers if h is not leader]
-
-    if not leader or not followers:
-        print("[Manual Mode] Leader or followers missing. Aborting manual follow.")
-        if broadcast_log:
-            broadcast_log("[Manual Mode] Aborted: Requires at least 1 Leader and 1 Follower.")
-        with _manual_mode_lock:
-            global _manual_mode_active
-            _manual_mode_active = False
-        _mission_in_progress.clear()
-        if broadcast_status:
-            broadcast_status({"manual_mode": False})
-        return
-
-    last_dispatch_time = 0.0
-    DISPATCH_INTERVAL_S = 0.5  # 2 Hz waypoint stream
-    followers_launched = False
-
-    while not _manual_stop_event.is_set():
-        now = time.time()
-        _last_activity_time = now
-
-        # Master condition: must be armed and airborne (> 1.0m AGL) with valid GPS fix
-        master_is_flying = leader.armed and (leader.current_alt >= 1.0) and (abs(leader.lat) > 0.001)
-
-        if not master_is_flying:
-            # Master is on the ground or disarmed - slaves DO NOT take off.
-            followers_launched = False
-            time.sleep(0.5)
-            continue
-
-        # Master is flying! Target altitude for slaves is Master's target/flight altitude
-        target_slave_alt = max(leader.current_alt, ui_target_alt)
-
-        # Launch followers if they are still on the ground
-        if not followers_launched:
-            needing_takeoff = [f for f in followers if not f.armed or f.current_alt < 1.0]
-            if needing_takeoff:
-                if broadcast_log:
-                    broadcast_log(f"[Manual Mode] Master airborne! Launching {len(needing_takeoff)} follower(s) to {target_slave_alt:.1f}m...")
-                for i, f in enumerate(needing_takeoff):
-                    if i > 0:
-                        time.sleep(TAKEOFF_STAGGER_S)
-                    threading.Thread(target=f.takeoff, args=(target_slave_alt,), daemon=True).start()
-
-                climb_start = time.time()
-                while time.time() - climb_start < 45.0 and not _manual_stop_event.is_set():
-                    if all(f.current_alt >= (target_slave_alt - 1.5) for f in followers):
-                        break
-                    time.sleep(0.5)
-
-            followers_launched = True
-            if broadcast_log:
-                broadcast_log("[Manual Mode] Followers airborne. Streaming formation follow...")
-
-        # Follower streaming loop
-        if now - last_dispatch_time >= DISPATCH_INTERVAL_S:
-            last_dispatch_time = now
-
-            master_lat = leader.lat
-            master_lon = leader.lon
-            master_yaw = leader.yaw
-            master_alt = leader.current_alt
-
-            # Compute formation offsets relative to Master
-            offsets = calculate_formation_offsets(
-                master_lat,
-                master_lon,
-                master_yaw,
-                follower_count=len(followers),
-                pattern=pattern if formation else "V",
-                spacing_m=max(spacing_m, 3.0),  # Breathing room: minimum 3m
-            )
-
-            # ALL slaves hover at the same target altitude
-            slave_targets = [(f_lat, f_lon, target_slave_alt) for (f_lat, f_lon) in offsets]
-
-            # Collision check: pairwise between Master and all slaves, and between slaves
-            all_targets = [(master_lat, master_lon, master_alt)] + slave_targets
-            conflicts = check_formation_separation(all_targets, min_sep_m=COLLISION_WARN_M)
-
-            if conflicts:
-                # Vertical stagger emergency separation if lateral spacing drops below safe threshold
-                slave_targets = [
-                    (t_lat, t_lon, t_alt + (i + 1) * COLLISION_ALT_STEP_M)
-                    for i, (t_lat, t_lon, t_alt) in enumerate(slave_targets)
-                ]
-
-            # Dispatch waypoint stream to each slave
-            for i, (follower, target) in enumerate(zip(followers, slave_targets)):
-                if _manual_stop_event.is_set():
-                    break
-                if i > 0:
-                    time.sleep(SERIAL_DISPATCH_SPACING_S)
-                t_lat, t_lon, t_alt = target
-                follower.fly_to_gps(t_lat, t_lon, t_alt, set_guided=False)
-
-        time.sleep(0.05)
-
-    print("[Manual Mode] Follow loop exited.")
-    _mission_in_progress.clear()
-    _last_activity_time = time.time()
-    if broadcast_log:
-        broadcast_log("[Manual Mode] Disengaged: Slaves holding position in GUIDED hover.")
-    if broadcast_status:
-        broadcast_status({"manual_mode": False})
-
-
-def stop_manual_mode():
-    """Stop the manual RC follower thread."""
-    global _manual_mode_active, _manual_thread
-    with _manual_mode_lock:
-        if _manual_mode_active:
-            _manual_stop_event.set()
-            _manual_mode_active = False
-            return True
-        return False
-
-
-def start_manual_mode(cmd_data, active_handlers):
-    """Start the manual RC follower thread."""
-    global _manual_mode_active, _manual_thread
-    with _manual_mode_lock:
-        if _manual_mode_active:
-            # Toggle off if already running
-            _manual_stop_event.set()
-            _manual_mode_active = False
-            return
-        _manual_stop_event.clear()
-        _manual_mode_active = True
-        _manual_thread = threading.Thread(
-            target=_manual_follow_loop,
-            args=(cmd_data, active_handlers),
-            daemon=True,
-        )
-        _manual_thread.start()
-
-
-def _autonomous_mission_worker(cmd_data, active_handlers):
-    """
-    Autonomous one-click mission:
-    1. If not armed/airborne, sets GUIDED, arms, and commands takeoff to target altitude.
-    2. Waits for all drones to reach hover altitude (alt >= target_alt - 1.0m).
-    3. Calculates formation offsets relative to Drone 1 (Leader).
-    4. Commands drones to their respective target positions.
-    5. Monitors navigation progress until drones arrive near targets.
-    6. Returns swarm to hovering state; arms the 30-second inactivity watchdog.
-    """
-    global _last_activity_time
-    _mission_in_progress.set()
-    try:
-        raw_lat = cmd_data.get("lat")
-        raw_lon = cmd_data.get("lon")
-        if raw_lat is None or raw_lon is None:
-            print("[Mission] Aborted: Latitude or Longitude missing.")
-            return
-
-        lat = float(raw_lat)
-        lon = float(raw_lon)
-        target_alt = float(cmd_data.get("alt") or 5.0)
-        formation = cmd_data.get("formation", False)
-        pattern = cmd_data.get("pattern", "V")
-        spacing_m = float(cmd_data.get("spacing_m", 10.0))
-
-        leader = get_leader(active_handlers)
-        if leader is None:
-            return
-
-        print(
-            f"[Mission] Starting autonomous mission to ({lat:.6f}, {lon:.6f}, {target_alt:.1f}m)..."
-        )
-        try:
-            from web_server import broadcast_log
-
-            broadcast_log(
-                f"[Mission] Initiating autonomous swarm mission to {lat:.6f}, {lon:.6f} at {target_alt}m."
-            )
-        except Exception:
-            pass
-
-        # Step 1: Check which drones need takeoff
-        takeoff_needed = [
-            h for h in active_handlers if not h.armed or h.current_alt < 1.0
-        ]
-        if takeoff_needed:
-            print(
-                f"[Mission] {len(takeoff_needed)} drone(s) require launch. Executing staggered takeoff..."
-            )
-            for i, h in enumerate(takeoff_needed):
-                if i > 0:
-                    time.sleep(TAKEOFF_STAGGER_S)
-                threading.Thread(
-                    target=h.takeoff, args=(target_alt,), daemon=True
-                ).start()
-
-            # Step 2: Wait until all drones reach target altitude (within 1.0m tolerance)
-            climb_start = time.time()
-            climb_timeout_s = 60.0
-            while time.time() - climb_start < climb_timeout_s:
-                all_at_alt = True
-                for h in active_handlers:
-                    if h.current_alt < (target_alt - 1.0):
-                        all_at_alt = False
-                        break
-                if all_at_alt:
-                    print("[Mission] All drones reached target altitude.")
-                    break
-                time.sleep(0.5)
-
-        # Step 3: Compute targets & formations
-        followers = [h for h in active_handlers if h is not leader]
-        if formation and followers:
-            heading = leader.yaw
-            offsets = calculate_formation_offsets(
-                lat,
-                lon,
-                heading,
-                follower_count=len(followers),
-                pattern=pattern,
-                spacing_m=spacing_m,
-            )
-            targets = [(lat, lon, target_alt)] + [
-                (f_lat, f_lon, target_alt) for f_lat, f_lon in offsets
-            ]
-            conflicts = check_formation_separation(targets, min_sep_m=COLLISION_WARN_M)
-            if conflicts:
-                print(
-                    f"[Swarm] Collision warning – {len(conflicts)} pair(s) within {COLLISION_WARN_M}m. Staggering altitudes."
-                )
-                targets = [
-                    (t_lat, t_lon, t_alt + i * COLLISION_ALT_STEP_M)
-                    for i, (t_lat, t_lon, t_alt) in enumerate(targets)
-                ]
-            drone_target_map = {leader: targets[0]}
-            for h, tgt in zip(followers, targets[1:]):
-                drone_target_map[h] = tgt
-        else:
-            drone_target_map = {}
-            for i, h in enumerate(active_handlers):
-                # When no formation pattern is specified, stagger altitudes between drones
-                # so they do not collide at the same lat/lon waypoint
-                stagger_alt = target_alt + (
-                    i * COLLISION_ALT_STEP_M if len(active_handlers) > 1 else 0
-                )
-                drone_target_map[h] = (lat, lon, stagger_alt)
-
-        # Step 4: Dispatch fly_to commands with staggered bus spacing
-        for i, (h, (t_lat, t_lon, t_alt)) in enumerate(drone_target_map.items()):
-            if i > 0:
-                time.sleep(SERIAL_DISPATCH_SPACING_S)
-            threading.Thread(
-                target=h.fly_to_gps, args=(t_lat, t_lon, t_alt), daemon=True
-            ).start()
-
-        # Step 5: Monitor horizontal progress until arrived (within 2.5m)
-        nav_start = time.time()
-        nav_timeout_s = 180.0
-        while time.time() - nav_start < nav_timeout_s:
-            all_arrived = True
-            for h, (t_lat, t_lon, _) in drone_target_map.items():
-                if abs(h.lat) > 0.001 and abs(h.lon) > 0.001:
-                    dist = _haversine_m(h.lat, h.lon, t_lat, t_lon)
-                    if dist > 2.5:
-                        all_arrived = False
-                        break
-            if all_arrived:
-                print(
-                    "[Mission] All drones arrived at waypoint formation. Now hovering."
-                )
-                try:
-                    from web_server import broadcast_log
-
-                    broadcast_log(
-                        "[Mission] Swarm arrived at target formation. Hovering for new commands (Auto-RTL in 30s if idle)."
-                    )
-                except Exception:
-                    pass
-                break
-            time.sleep(1.0)
-
-    except Exception as e:
-        print(f"[Mission] Error in autonomous mission worker: {e}")
-    finally:
-        # Step 6: Mark mission complete; start the 30-second idle countdown from now
-        _mission_in_progress.clear()
-        _last_activity_time = time.time()
-
-
 def perform_swarm_command(cmd_data, drone_handlers):
     global _active_handlers_ref
     notify_user_activity()
-    _start_inactivity_watchdog()
-
-    cmd = cmd_data.get("cmd")
-    print(f"[Swarm] Command: {cmd}")
-
     if cmd_data.get("type") == "set_leader":
         set_leader(cmd_data.get("sysid", 1))
         return
-
-    active_handlers = [h for h in drone_handlers if h.sysid != "N/A" and h.connection]
-    if not active_handlers:
+    active = sorted((h for h in drone_handlers if h.sysid != "N/A" and h.connection),
+                    key=lambda h: h.sysid)
+    handlers = _ordered(active)
+    if not handlers:
         return
-
-    active_handlers.sort(key=lambda h: h.sysid)
-    _active_handlers_ref = active_handlers
-
-    if cmd == "arm":
-
-        def _staggered_arm():
-            for i, h in enumerate(active_handlers):
-                if i > 0:
-                    time.sleep(SERIAL_DISPATCH_SPACING_S)
-                threading.Thread(target=h.arm_drone, daemon=True).start()
-
-        threading.Thread(target=_staggered_arm, daemon=True).start()
-
-    elif cmd == "disarm":
-        stop_manual_mode()
-        _mission_in_progress.clear()
-
-        def _staggered_disarm():
-            for i, h in enumerate(active_handlers):
-                if i > 0:
-                    time.sleep(SERIAL_DISPATCH_SPACING_S)
-                threading.Thread(target=h.disarm_drone, daemon=True).start()
-
-        threading.Thread(target=_staggered_disarm, daemon=True).start()
-
-    elif cmd == "takeoff":
-        alt = float(cmd_data.get("alt", 5))
-
-        def _staggered_takeoff():
-            for i, h in enumerate(active_handlers):
-                if i > 0:
-                    time.sleep(TAKEOFF_STAGGER_S)
-                threading.Thread(target=h.takeoff, args=(alt,), daemon=True).start()
-
-        threading.Thread(target=_staggered_takeoff, daemon=True).start()
-
-    elif cmd == "rtl":
-        stop_manual_mode()
-        _mission_in_progress.clear()
-        print(
-            f"[Swarm] Executing RTL with vertical stagger ({COLLISION_ALT_STEP_M}m step)..."
-        )
-
-        def _staggered_rtl():
-            for i, h in enumerate(active_handlers):
-                if i > 0:
-                    time.sleep(SERIAL_DISPATCH_SPACING_S)
-                # Stagger RTL return altitude to prevent mid-air collision during transit/descent
-                stagger_rtl_alt = 10.0 + (i * COLLISION_ALT_STEP_M)
-                try:
-                    # Set RTL_ALT parameter per drone (in cm: 10m = 1000cm, 12.5m = 1250cm, etc.)
-                    h.connection.mav.param_set_send(
-                        h.sysid,
-                        h.connection.target_component,
-                        b"RTL_ALT\x00\x00\x00\x00\x00\x00\x00\x00",
-                        float(stagger_rtl_alt * 100),
-                        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
-                    )
-                except Exception:
-                    pass
-                threading.Thread(target=h.rtl, daemon=True).start()
-
-        threading.Thread(target=_staggered_rtl, daemon=True).start()
-
-    elif cmd == "land":
-        stop_manual_mode()
-        _mission_in_progress.clear()
-
-        def _staggered_land():
-            for i, h in enumerate(active_handlers):
-                if i > 0:
-                    time.sleep(SERIAL_DISPATCH_SPACING_S)
-                threading.Thread(target=h.land, daemon=True).start()
-
-        threading.Thread(target=_staggered_land, daemon=True).start()
-
+    _active_handlers_ref = active
+    _start_inactivity_watchdog()
+    cmd = cmd_data.get("cmd")
+    if cmd == "manual_mode":
+        if stop_manual_mode():
+            return
+        _start_worker(cmd, lambda cancel: _manual_follow_loop(cmd_data, handlers, cancel))
     elif cmd == "fly_to":
-        stop_manual_mode()
-        # One-click autonomous mission: auto arm/takeoff if on ground, fly in formation, hover & watchdog
-        threading.Thread(
-            target=_autonomous_mission_worker,
-            args=(cmd_data, active_handlers),
-            daemon=True,
-        ).start()
-
-    elif cmd == "manual_mode":
-        # Toggle or start manual RC follow mode
-        start_manual_mode(cmd_data, active_handlers)
+        _start_worker(cmd, lambda cancel: _autonomous_mission_worker(cmd_data, handlers, cancel))
+    elif cmd == "takeoff":
+        try:
+            altitude = _number(cmd_data.get("alt", 5), "altitude", 1.0)
+        except (TypeError, ValueError) as exc:
+            _log(f"[Swarm] Takeoff aborted: {exc}")
+            return
+        _start_worker(cmd, lambda cancel: _takeoff_ordered(handlers, altitude, cancel))
+    elif cmd in ("land", "rtl"):
+        _start_worker(cmd, lambda cancel: _land_ordered(handlers, cmd, cancel))
+    elif cmd in ("arm", "disarm"):
+        _cancel_worker()
+        # Emergency disarm has no stagger or telemetry wait. This dispatch is
+        # serialized with old navigation, with the selected leader first.
+        for h in handlers:
+            with _dispatch_lock:
+                getattr(h, "arm_drone" if cmd == "arm" else "disarm_drone")()
