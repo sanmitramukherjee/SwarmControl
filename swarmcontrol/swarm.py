@@ -685,12 +685,31 @@ def _wait_group_arrival(handlers, targets, cancel, description):
 
 
 def _dispatch_group_waypoints(handlers, targets, cancel, description):
-    if (
-        _group_route_separation({h: _position(h) for h in handlers}, targets)
-        < COLLISION_WARN_M + 0.5
-    ):
-        _hold(handlers, cancel)
-        raise ValueError(f"unsafe coordinated {description} path; fleet held")
+    starts = {h: _position(h) for h in handlers}
+    if _group_route_separation(starts, targets) < COLLISION_WARN_M + 0.5:
+        if description != "target flight":
+            _hold(handlers, cancel)
+            raise ValueError(f"unsafe coordinated {description} path; fleet held")
+        leader = handlers[0]
+        leader_start = starts[leader]
+        leader_target = targets[leader]
+        # Route estimates use a nominal speed and can be overly conservative
+        # for long legs. Preserve the current formation by translating every
+        # aircraft by the leader's requested displacement. This keeps the
+        # leader on the exact requested coordinate and avoids follower path
+        # crossings caused by reassigning formation slots mid-flight.
+        targets = {
+            h: (
+                leader_target[0] + starts[h][0] - leader_start[0],
+                leader_target[1] + starts[h][1] - leader_start[1],
+                leader_target[2] + starts[h][2] - leader_start[2],
+            )
+            for h in handlers
+        }
+        targets[leader] = leader_target
+        _log(
+            f"[Mission] Reusing current formation for {description}; leader waypoint unchanged."
+        )
     for h in handlers:
         if not _call(cancel, h, "fly_to_gps", *targets[h], set_guided=False):
             return False

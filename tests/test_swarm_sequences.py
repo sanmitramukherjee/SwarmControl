@@ -1,3 +1,4 @@
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -251,6 +252,23 @@ class SequenceTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "unsafe path"):
             swarm._safe_sequential_paths([leader, first, second], targets)
+
+    def test_target_route_fallback_keeps_leader_waypoint_and_translates_formation(self):
+        calls = []
+        leader = FakeHandler(2, lat=10.0, lon=10.0, alt=5, armed=True, calls=calls)
+        follower = FakeHandler(
+            1, lat=10.0001, lon=10.0002, alt=5, armed=True, calls=calls
+        )
+        targets = {leader: (10.01, 10.02, 8), follower: (10.01, 10.02, 8)}
+        with patch.object(swarm, "_group_route_separation", return_value=0.0):
+            result = swarm._dispatch_group_waypoints(
+                [leader, follower], targets, threading.Event(), "target flight"
+            )
+        self.assertTrue(result)
+        self.assertEqual((leader.lat, leader.lon, leader.current_alt), targets[leader])
+        follower_call = next(call for call in calls if call[0] == follower.sysid)
+        self.assertAlmostEqual(follower_call[2] - leader.lat, 0.0001)
+        self.assertAlmostEqual(follower_call[3] - leader.lon, 0.0002)
 
     def test_grounded_sitl_fleet_arms_launches_and_moves_together(self):
         calls = []
