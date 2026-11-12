@@ -54,7 +54,7 @@ def takeoff(connection, systemID, altitude):
     )
 
 
-def fly_to_gps(connection, systemID, lat, lon, alt):
+def fly_to_gps(connection, systemID, lat, lon, alt, set_guided=True):
     """Fly to GPS coordinates using relative altitude AGL.
 
     Args:
@@ -63,15 +63,16 @@ def fly_to_gps(connection, systemID, lat, lon, alt):
         lat:        Target latitude in decimal degrees.
         lon:        Target longitude in decimal degrees.
         alt:        Target relative altitude (AGL) in metres.
+        set_guided: When True, sends GUIDED mode change before waypoint.
+                    Set to False during streaming follow loops to avoid radio spam.
     """
     frame = mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
-    print(f"[Drone {systemID}] Switching to GUIDED for Mission...")
-    connection.mav.set_mode_send(
-        systemID,
-        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-        4,  # 4 = GUIDED for ArduCopter
-    )
-    print(f"[Drone {systemID}] Flying to {lat}, {lon}, {alt}m (REL)...")
+    if set_guided:
+        connection.mav.set_mode_send(
+            systemID,
+            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+            4,  # 4 = GUIDED for ArduCopter
+        )
     connection.mav.set_position_target_global_int_send(
         0,
         systemID,

@@ -27,6 +27,12 @@ _last_activity_time = time.time()
 _watchdog_thread_started = False
 _active_handlers_ref = []
 
+# Manual follow mode state
+_manual_mode_active = False
+_manual_mode_lock = threading.Lock()
+_manual_thread = None
+_manual_stop_event = threading.Event()
+
 
 def notify_user_activity():
     """Reset the 30-second inactivity RTL timer."""
@@ -107,6 +113,172 @@ def _start_inactivity_watchdog():
         threading.Thread(target=_inactivity_watchdog_loop, daemon=True).start()
 
 
+def _manual_follow_loop(cmd_data, active_handlers):
+    """Background worker for Manual Mode.
+
+    RULE: Slaves ONLY launch and follow IF Master is armed AND airborne (> 1.0m AGL).
+    If Master is disarmed or on the ground, slaves remain on standby / hold position.
+    When Master takes off, slaves auto-arm and climb to match Master's target altitude.
+    """
+    global _last_activity_time
+    _mission_in_progress.set()
+
+    formation = cmd_data.get("formation", True)
+    pattern = cmd_data.get("pattern", "V")
+    spacing_m = float(cmd_data.get("spacing_m", 10.0))
+    # User-specified target altitude from UI panel (defaults to 10 if not set)
+    ui_target_alt = float(cmd_data.get("alt") or 10.0)
+
+    try:
+        from web_server import broadcast_log, broadcast_status
+    except ImportError:
+        broadcast_log = None
+        broadcast_status = None
+
+    if broadcast_log:
+        broadcast_log("[Manual Mode] Standby: Waiting for Master to arm and take off...")
+    if broadcast_status:
+        broadcast_status({"manual_mode": True})
+
+    leader = get_leader(active_handlers)
+    followers = [h for h in active_handlers if h is not leader]
+
+    if not leader or not followers:
+        print("[Manual Mode] Leader or followers missing. Aborting manual follow.")
+        if broadcast_log:
+            broadcast_log("[Manual Mode] Aborted: Requires at least 1 Leader and 1 Follower.")
+        with _manual_mode_lock:
+            global _manual_mode_active
+            _manual_mode_active = False
+        _mission_in_progress.clear()
+        if broadcast_status:
+            broadcast_status({"manual_mode": False})
+        return
+
+    last_dispatch_time = 0.0
+    DISPATCH_INTERVAL_S = 0.5  # 2 Hz waypoint stream
+    followers_launched = False
+
+    while not _manual_stop_event.is_set():
+        now = time.time()
+        _last_activity_time = now
+
+        # Master condition: must be armed and airborne (> 1.0m AGL) with valid GPS fix
+        master_is_flying = leader.armed and (leader.current_alt >= 1.0) and (abs(leader.lat) > 0.001)
+
+        if not master_is_flying:
+            # Master is on the ground or disarmed - slaves DO NOT take off.
+            followers_launched = False
+            time.sleep(0.5)
+            continue
+
+        # Master is flying! Target altitude for slaves is Master's target/flight altitude
+        target_slave_alt = max(leader.current_alt, ui_target_alt)
+
+        # Launch followers if they are still on the ground
+        if not followers_launched:
+            needing_takeoff = [f for f in followers if not f.armed or f.current_alt < 1.0]
+            if needing_takeoff:
+                if broadcast_log:
+                    broadcast_log(f"[Manual Mode] Master airborne! Launching {len(needing_takeoff)} follower(s) to {target_slave_alt:.1f}m...")
+                for i, f in enumerate(needing_takeoff):
+                    if i > 0:
+                        time.sleep(TAKEOFF_STAGGER_S)
+                    threading.Thread(target=f.takeoff, args=(target_slave_alt,), daemon=True).start()
+
+                climb_start = time.time()
+                while time.time() - climb_start < 45.0 and not _manual_stop_event.is_set():
+                    if all(f.current_alt >= (target_slave_alt - 1.5) for f in followers):
+                        break
+                    time.sleep(0.5)
+
+            followers_launched = True
+            if broadcast_log:
+                broadcast_log("[Manual Mode] Followers airborne. Streaming formation follow...")
+
+        # Follower streaming loop
+        if now - last_dispatch_time >= DISPATCH_INTERVAL_S:
+            last_dispatch_time = now
+
+            master_lat = leader.lat
+            master_lon = leader.lon
+            master_yaw = leader.yaw
+            master_alt = leader.current_alt
+
+            # Compute formation offsets relative to Master
+            offsets = calculate_formation_offsets(
+                master_lat,
+                master_lon,
+                master_yaw,
+                follower_count=len(followers),
+                pattern=pattern if formation else "V",
+                spacing_m=max(spacing_m, 3.0),  # Breathing room: minimum 3m
+            )
+
+            # ALL slaves hover at the same target altitude
+            slave_targets = [(f_lat, f_lon, target_slave_alt) for (f_lat, f_lon) in offsets]
+
+            # Collision check: pairwise between Master and all slaves, and between slaves
+            all_targets = [(master_lat, master_lon, master_alt)] + slave_targets
+            conflicts = check_formation_separation(all_targets, min_sep_m=COLLISION_WARN_M)
+
+            if conflicts:
+                # Vertical stagger emergency separation if lateral spacing drops below safe threshold
+                slave_targets = [
+                    (t_lat, t_lon, t_alt + (i + 1) * COLLISION_ALT_STEP_M)
+                    for i, (t_lat, t_lon, t_alt) in enumerate(slave_targets)
+                ]
+
+            # Dispatch waypoint stream to each slave
+            for i, (follower, target) in enumerate(zip(followers, slave_targets)):
+                if _manual_stop_event.is_set():
+                    break
+                if i > 0:
+                    time.sleep(SERIAL_DISPATCH_SPACING_S)
+                t_lat, t_lon, t_alt = target
+                follower.fly_to_gps(t_lat, t_lon, t_alt, set_guided=False)
+
+        time.sleep(0.05)
+
+    print("[Manual Mode] Follow loop exited.")
+    _mission_in_progress.clear()
+    _last_activity_time = time.time()
+    if broadcast_log:
+        broadcast_log("[Manual Mode] Disengaged: Slaves holding position in GUIDED hover.")
+    if broadcast_status:
+        broadcast_status({"manual_mode": False})
+
+
+def stop_manual_mode():
+    """Stop the manual RC follower thread."""
+    global _manual_mode_active, _manual_thread
+    with _manual_mode_lock:
+        if _manual_mode_active:
+            _manual_stop_event.set()
+            _manual_mode_active = False
+            return True
+        return False
+
+
+def start_manual_mode(cmd_data, active_handlers):
+    """Start the manual RC follower thread."""
+    global _manual_mode_active, _manual_thread
+    with _manual_mode_lock:
+        if _manual_mode_active:
+            # Toggle off if already running
+            _manual_stop_event.set()
+            _manual_mode_active = False
+            return
+        _manual_stop_event.clear()
+        _manual_mode_active = True
+        _manual_thread = threading.Thread(
+            target=_manual_follow_loop,
+            args=(cmd_data, active_handlers),
+            daemon=True,
+        )
+        _manual_thread.start()
+
+
 def _autonomous_mission_worker(cmd_data, active_handlers):
     """
     Autonomous one-click mission:
@@ -120,9 +292,15 @@ def _autonomous_mission_worker(cmd_data, active_handlers):
     global _last_activity_time
     _mission_in_progress.set()
     try:
-        lat = float(cmd_data.get("lat"))
-        lon = float(cmd_data.get("lon"))
-        target_alt = float(cmd_data.get("alt", 5.0))
+        raw_lat = cmd_data.get("lat")
+        raw_lon = cmd_data.get("lon")
+        if raw_lat is None or raw_lon is None:
+            print("[Mission] Aborted: Latitude or Longitude missing.")
+            return
+
+        lat = float(raw_lat)
+        lon = float(raw_lon)
+        target_alt = float(cmd_data.get("alt") or 5.0)
         formation = cmd_data.get("formation", False)
         pattern = cmd_data.get("pattern", "V")
         spacing_m = float(cmd_data.get("spacing_m", 10.0))
@@ -202,6 +380,8 @@ def _autonomous_mission_worker(cmd_data, active_handlers):
         else:
             drone_target_map = {}
             for i, h in enumerate(active_handlers):
+                # When no formation pattern is specified, stagger altitudes between drones
+                # so they do not collide at the same lat/lon waypoint
                 stagger_alt = target_alt + (
                     i * COLLISION_ALT_STEP_M if len(active_handlers) > 1 else 0
                 )
@@ -279,6 +459,7 @@ def perform_swarm_command(cmd_data, drone_handlers):
         threading.Thread(target=_staggered_arm, daemon=True).start()
 
     elif cmd == "disarm":
+        stop_manual_mode()
         _mission_in_progress.clear()
 
         def _staggered_disarm():
@@ -301,6 +482,7 @@ def perform_swarm_command(cmd_data, drone_handlers):
         threading.Thread(target=_staggered_takeoff, daemon=True).start()
 
     elif cmd == "rtl":
+        stop_manual_mode()
         _mission_in_progress.clear()
         print(
             f"[Swarm] Executing RTL with vertical stagger ({COLLISION_ALT_STEP_M}m step)..."
@@ -328,6 +510,7 @@ def perform_swarm_command(cmd_data, drone_handlers):
         threading.Thread(target=_staggered_rtl, daemon=True).start()
 
     elif cmd == "land":
+        stop_manual_mode()
         _mission_in_progress.clear()
 
         def _staggered_land():
@@ -339,9 +522,14 @@ def perform_swarm_command(cmd_data, drone_handlers):
         threading.Thread(target=_staggered_land, daemon=True).start()
 
     elif cmd == "fly_to":
+        stop_manual_mode()
         # One-click autonomous mission: auto arm/takeoff if on ground, fly in formation, hover & watchdog
         threading.Thread(
             target=_autonomous_mission_worker,
             args=(cmd_data, active_handlers),
             daemon=True,
         ).start()
+
+    elif cmd == "manual_mode":
+        # Toggle or start manual RC follow mode
+        start_manual_mode(cmd_data, active_handlers)
