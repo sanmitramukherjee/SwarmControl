@@ -16,13 +16,14 @@
       <span class="brand-divider" aria-hidden="true"></span>
       <span class="brand-context">FLEET OPERATIONS</span>
     </a>
-    <div id="status-bar" aria-label="Fleet overview">
+    <div id="status-bar" role="group" aria-label="Fleet overview">
       <div class="sb-item" id="sb-mode"><span class="metric-label">MODE</span><span class="val" id="sb-mode-val">—</span></div>
       <div class="sb-item" id="sb-drones"><span class="metric-label">DRONES</span><span class="val" id="sb-drones-val">0</span></div>
       <div class="sb-item"><span class="metric-label">LEADER</span><span class="val" id="sb-leader-val">—</span></div>
       <div class="sb-item"><span class="metric-label">FORMATION</span><span class="val" id="sb-formation-val">V-SHAPE</span></div>
       <div class="sb-item ws-metric"><span class="metric-label">LINK</span><span class="val" id="sb-ws-val">CONNECTING…</span></div>
     </div>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme" aria-pressed="false">Dark mode</button>
   </header>
 
   <div id="reconnect-banner" role="status">⚠ WebSocket disconnected — reconnecting…</div>
@@ -31,26 +32,26 @@
     <aside class="fleet-rail" aria-label="Fleet status">
       <div class="rail-heading"><span class="eyebrow">FLEET</span></div>
       <button class="fleet-toggle" type="button" onclick="toggleDropdown()" aria-expanded="true" aria-controls="drone-list">
-        <span>Aircraft status</span><span id="arrow" class="chevron">▼</span>
+        <span>Aircraft status</span><span id="arrow" class="chevron" aria-hidden="true">▲</span>
       </button>
       <div class="stat-grid">
         <div class="stat-item"><div class="label">ACTIVE AIRCRAFT</div><div class="value" id="active-count">0</div></div>
         <div class="stat-item"><div class="label">AVG ALT <span>(AGL)</span></div><div class="value" id="avg-alt">0.0m</div></div>
       </div>
-      <div class="fleet-list-heading"><span>Aircraft</span><span class="eyebrow">SELECT TO INSPECT</span></div>
-      <div id="drone-list" class="open" aria-label="Aircraft list"></div>
+      <div class="fleet-list-heading"><span>Aircraft</span><span id="drone-list-count" class="eyebrow">0 in fleet</span></div>
+      <div id="drone-list" class="open" role="group" aria-label="Aircraft list"></div>
     </aside>
 
     <section id="main-view" aria-label="3D fleet visualization">
       <div class="viewport-topline">
         <div><span class="eyebrow">MISSION VIEW</span><h1>Fleet overview</h1></div>
-        <div class="viewport-actions" aria-label="Viewport controls">
+        <div class="viewport-actions" role="group" aria-label="3D view controls">
           <button type="button" onclick="fitFleet()" title="Fit all aircraft in view">Fit fleet</button>
           <button type="button" onclick="setTopView()" title="Switch to top-down view">Top view</button>
           <button type="button" onclick="resetView()" title="Reset camera view">Reset</button>
         </div>
       </div>
-      <div id="canvas-container" aria-label="Interactive 3D aircraft view"></div>
+      <div id="canvas-container" role="img" aria-label="Interactive 3D fleet view. Use the aircraft list to select a drone and the view controls to adjust the camera."></div>
       <div id="loading" role="status">INITIALIZING 3D ENVIRONMENT…</div>
       <div class="view-hint">Select an aircraft in the fleet list <span>·</span> Drag to orbit <span>·</span> Scroll to zoom</div>
       <div id="collision-banner" role="alert">⚠ COLLISION PROXIMITY ALERT</div>
@@ -59,8 +60,8 @@
     <aside id="right-sidebar" aria-label="Mission controls">
       <div class="controls-heading"><div><span class="eyebrow">COMMAND</span><h2>Mission controls</h2></div></div>
       <section class="panel">
-        <button class="panel-title" type="button" onclick="togglePanel('swarm-body','swarm-arrow')" aria-controls="swarm-body" aria-label="Toggle swarm control">
-          <span class="panel-title-icon" aria-hidden="true">✣</span><span class="panel-title-text">Swarm control</span><span class="toggle-arrow" id="swarm-arrow">▲</span>
+        <button class="panel-title" type="button" onclick="togglePanel('swarm-body','swarm-arrow')" aria-controls="swarm-body" aria-expanded="true" aria-label="Toggle swarm control">
+          <span class="panel-title-icon" aria-hidden="true">✣</span><span class="panel-title-text">Swarm control</span><span class="toggle-arrow" id="swarm-arrow" aria-hidden="true">▲</span>
         </button>
         <div class="panel-body" id="swarm-body">
           <div class="ctrl-group">
@@ -80,7 +81,7 @@
           <div class="ctrl-group altitude-group"><label class="ctrl-label" for="cmd-alt">ALTITUDE <span class="unit">(AGL)</span></label><div class="input-suffix"><input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1"><span>m</span></div></div>
           <div id="command-feedback" role="status" aria-live="polite"></div>
           <div class="section-label action-label">FLIGHT ACTIONS</div>
-          <div class="btn-grid" aria-label="Routine flight actions">
+          <div class="btn-grid" role="group" aria-label="Routine flight actions">
             <button class="swarm-btn success" type="button" onclick="swarmCmd('arm')">ARM</button>
             <button class="swarm-btn" type="button" onclick="swarmCmd('takeoff')">TAKEOFF</button>
             <button class="swarm-btn accent span2" type="button" onclick="swarmCmd('fly_to')">FLY TO TARGET <span aria-hidden="true">↗</span></button>
@@ -97,8 +98,8 @@
       </section>
 
       <section class="panel tracker-panel">
-        <button class="panel-title" type="button" onclick="togglePanel('tracker-body','tracker-arrow')" aria-controls="tracker-body" aria-label="Toggle drone tracker">
-          <span class="panel-title-icon tracker-icon" aria-hidden="true">◎</span><span class="panel-title-text">Drone tracker</span><span class="toggle-arrow" id="tracker-arrow">▼</span>
+        <button class="panel-title" type="button" onclick="togglePanel('tracker-body','tracker-arrow')" aria-controls="tracker-body" aria-expanded="false" aria-label="Toggle drone tracker">
+          <span class="panel-title-icon tracker-icon" aria-hidden="true">◎</span><span class="panel-title-text">Drone tracker</span><span class="toggle-arrow" id="tracker-arrow" aria-hidden="true">▼</span>
         </button>
         <div class="panel-body collapsed" id="tracker-body">
           <div id="tracker-view"><div id="tracker-label">NO TARGET</div></div>

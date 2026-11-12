@@ -11,6 +11,51 @@
     const DRONE_COLLISION_COLOR    = 0xff2222;
     const DRONE_NORMAL_EMISSIVE    = 0x123e3a;
     const DRONE_COLLISION_EMISSIVE = 0x550000;
+    let scene, camera, renderer, controls, ground, grid;
+    let trackerRenderer, trackerCamera;
+
+    // ======================== Dashboard theme ========================
+    const themeToggle = document.getElementById('theme-toggle');
+    function applyTheme(theme) {
+      const dark = theme === 'dark';
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.querySelector('meta[name="theme-color"]').content = dark ? '#111a22' : '#f2f4f7';
+      if (scene) {
+        scene.background.set(getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim());
+        scene.fog.color.set(getComputedStyle(document.documentElement).getPropertyValue('--canvas-fog').trim());
+        if (ground) ground.material.color.set(getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim());
+        if (grid) {
+          grid.material[0].color.set(getComputedStyle(document.documentElement).getPropertyValue('--canvas-grid').trim());
+          grid.material[1].color.set(getComputedStyle(document.documentElement).getPropertyValue('--canvas-grid-secondary').trim());
+        }
+      }
+      if (themeToggle) {
+        themeToggle.textContent = dark ? 'Light mode' : 'Dark mode';
+        themeToggle.setAttribute('aria-label', `Switch to ${dark ? 'light' : 'dark'} theme`);
+        themeToggle.setAttribute('aria-pressed', String(dark));
+      }
+    }
+    let savedTheme = 'light';
+    try { savedTheme = localStorage.getItem('swarmcontrol-theme') || 'light'; } catch (_) { /* Storage can be disabled. */ }
+    applyTheme(savedTheme);
+    if (themeToggle) themeToggle.addEventListener('click', () => {
+      const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+      applyTheme(theme);
+      try { localStorage.setItem('swarmcontrol-theme', theme); } catch (_) { /* Theme remains active for this page. */ }
+    });
+
+    // Keep the event log truly compact when collapsed, including on small screens.
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    function updateSidebarToggle() {
+      if (!sidebarToggle) return;
+      const collapsed = document.getElementById('sidebar').classList.contains('collapsed');
+      sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+      sidebarToggle.setAttribute('aria-label', `${collapsed ? 'Expand' : 'Collapse'} system event log`);
+      sidebarToggle.title = `${collapsed ? 'Expand' : 'Collapse'} event log`;
+    }
+    const sidebarObserver = new MutationObserver(updateSidebarToggle);
+    sidebarObserver.observe(document.getElementById('sidebar'), { attributes: true, attributeFilter: ['class'] });
+    updateSidebarToggle();
 
     // ======================== Panel Toggle ========================
     function togglePanel(bodyId, arrowId) {
@@ -298,8 +343,6 @@
 
     // ======================== 3D Scene ========================
     const drones = {};
-    let scene, camera, renderer, controls;
-    let trackerRenderer, trackerCamera;
     let selectedDroneId = null;
     let isDropdownOpen = true;
     document.getElementById('drone-list').classList.add('open');
@@ -323,8 +366,8 @@
       const container = document.getElementById('canvas-container');
 
       scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x101820);
-      scene.fog = new THREE.Fog(0x101820, 100, 5000);
+      scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim());
+      scene.fog = new THREE.Fog(getComputedStyle(document.documentElement).getPropertyValue('--canvas-fog').trim(), 100, 5000);
 
       camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
       camera.position.set(0, 85, 105);
@@ -349,11 +392,14 @@
       dir.position.set(50, 100, 50);
       scene.add(dir);
 
-      scene.add(new THREE.GridHelper(1000, 100, 0x39545d, 0x23333b));
+      grid = new THREE.GridHelper(1000, 100,
+        Number(getComputedStyle(document.documentElement).getPropertyValue('--canvas-grid').trim().replace('#', '0x')),
+        Number(getComputedStyle(document.documentElement).getPropertyValue('--canvas-grid-secondary').trim().replace('#', '0x')));
+      scene.add(grid);
 
-      const ground = new THREE.Mesh(
+      ground = new THREE.Mesh(
         new THREE.PlaneGeometry(200000, 200000),
-        new THREE.MeshBasicMaterial({ color: 0x152129, side: THREE.DoubleSide })
+        new THREE.MeshBasicMaterial({ color: getComputedStyle(document.documentElement).getPropertyValue('--canvas-bg').trim(), side: THREE.DoubleSide })
       );
       ground.rotation.x = -Math.PI / 2;
       ground.position.y = -0.5;
@@ -371,7 +417,9 @@
 
         // Prop spin
         Object.values(drones).forEach(d => {
-          if (d.rotors) d.rotors.forEach((rotor, index) => { rotor.rotation.y += index % 2 ? -0.4 : 0.4; });
+          if (d.telemetry && d.telemetry.armed && d.rotors) {
+            d.rotors.forEach((rotor, index) => { rotor.rotation.y += index % 2 ? -0.4 : 0.4; });
+          }
         });
 
         // ---- Collision proximity check (runs every frame, cheap pairwise) ----
@@ -526,7 +574,16 @@
       const bodyMaterial = new THREE.MeshPhongMaterial({
         color: DRONE_NORMAL_COLOR, emissive: DRONE_NORMAL_EMISSIVE, emissiveIntensity: 0.5
       });
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.16, 0.34), bodyMaterial);
+      const body = new THREE.Group();
+      const bodyTube = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.5, 16), bodyMaterial);
+      bodyTube.rotation.x = Math.PI / 2;
+      body.add(bodyTube);
+      const bodyNose = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 10), bodyMaterial);
+      bodyNose.position.z = -0.25;
+      body.add(bodyNose);
+      const bodyTail = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 10), bodyMaterial);
+      bodyTail.position.z = 0.25;
+      body.add(bodyTail);
       body.position.y = 0.02;
       group.add(body);
 
@@ -534,9 +591,11 @@
       const motorMaterial = new THREE.MeshPhongMaterial({ color: 0xa9bdc5, shininess: 70 });
       const rotorBladeMaterial = new THREE.MeshBasicMaterial({ color: 0xc3d1cf, transparent: true, opacity: 0.78 });
       const motorPoints = [
-        { x: 0.62, z: 0.62 }, { x: -0.62, z: 0.62 },
-        { x: 0.62, z: -0.62 }, { x: -0.62, z: -0.62 },
+        { x: 0.72, z: 0.72 }, { x: -0.72, z: 0.72 },
+        { x: 0.72, z: -0.72 }, { x: -0.72, z: -0.72 },
       ];
+      const hubMaterial = new THREE.MeshPhongMaterial({ color: 0x354a53, shininess: 80 });
+      const canopyMaterial = new THREE.MeshPhongMaterial({ color: 0xe5a33a, shininess: 65 });
       const armGeometry = new THREE.CylinderGeometry(0.035, 0.045, 1, 8);
       const rotors = [];
       motorPoints.forEach(point => {
@@ -547,16 +606,34 @@
         arm.scale.y = end.length();
         group.add(arm);
 
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.11, 16), hubMaterial);
+        hub.position.set(point.x, 0.06, point.z);
+        group.add(hub);
+
         const rotor = new THREE.Group();
         rotor.position.set(point.x, 0.11, point.z);
-        const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.12, 12), motorMaterial);
+        const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.12, 16), motorMaterial);
         rotor.add(motor);
-        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.018, 0.055), rotorBladeMaterial);
-        blade.position.y = 0.075;
-        rotor.add(blade);
+        for (let bladeIndex = 0; bladeIndex < 2; bladeIndex++) {
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.018, 0.055), rotorBladeMaterial);
+          blade.position.y = 0.075;
+          blade.rotation.y = bladeIndex * Math.PI / 2;
+          rotor.add(blade);
+        }
         group.add(rotor);
         rotors.push(rotor);
       });
+
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.28, 8), armMaterial);
+      mast.position.set(0, 0.2, -0.12);
+      group.add(mast);
+      const gps = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 8), canopyMaterial);
+      gps.position.set(0, 0.37, -0.12);
+      group.add(gps);
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.26, 8), canopyMaterial);
+      nose.rotation.x = Math.PI / 2;
+      nose.position.set(0, 0.02, -0.38);
+      group.add(nose);
 
       // Label
       const lCanvas = document.createElement('canvas');
@@ -637,6 +714,7 @@
       const activeCount = allDrones.length;
       document.getElementById('active-count').textContent = activeCount;
       document.getElementById('sb-drones-val').textContent = activeCount;
+      document.getElementById('drone-list-count').textContent = `${activeCount} in fleet`;
 
       let totalAlt = 0;
       allDrones.forEach(d => {
@@ -712,24 +790,56 @@
           row = document.createElement('button');
           row.type = 'button';
           row.className = 'drone-row';
-          row.style.display = 'block';
-          row.style.width = '100%';
-          row.style.textAlign = 'left';
           row.dataset.droneId = id;
           const header = document.createElement('span');
           header.className = 'header';
-          header.style.display = 'block';
+          const title = document.createElement('span');
+          title.className = 'drone-name';
+          const badges = document.createElement('span');
+          badges.className = 'drone-badges';
+          const leaderBadge = document.createElement('span');
+          leaderBadge.className = 'drone-badge leader-badge';
+          leaderBadge.textContent = 'LEADER';
+          const stateDot = document.createElement('span');
+          stateDot.className = 'drone-state-dot';
+          stateDot.setAttribute('aria-hidden', 'true');
+          const stateText = document.createElement('span');
+          stateText.className = 'drone-state';
+          badges.append(leaderBadge, stateDot, stateText);
+          header.append(title, badges);
+
           const details = document.createElement('span');
           details.className = 'details';
-          const values = ['Lat', 'Lon', 'AGL', 'MSL', 'HSpd', 'VSpd'].map(label => {
+          const values = [
+            ['ALT', 'altitude'], ['H SPEED', 'horizontal-speed'], ['V SPEED', 'vertical-speed'],
+          ].map(([label, key]) => {
+            const metric = document.createElement('span');
+            metric.className = 'drone-metric';
+            const caption = document.createElement('span');
+            caption.className = 'drone-metric-label';
+            caption.textContent = label;
             const value = document.createElement('span');
-            value.dataset.label = label;
-            details.appendChild(value);
+            value.className = 'drone-metric-value';
+            value.dataset.metric = key;
+            metric.append(caption, value);
+            details.appendChild(metric);
             return value;
           });
-          row.append(header, details);
-          row._header = header;
+          const footer = document.createElement('span');
+          footer.className = 'drone-footer';
+          const position = document.createElement('span');
+          position.className = 'drone-coordinate';
+          const msl = document.createElement('span');
+          msl.className = 'drone-msl';
+          footer.append(position, msl);
+          row.append(header, details, footer);
+          row._title = title;
+          row._leaderBadge = leaderBadge;
+          row._stateDot = stateDot;
+          row._stateText = stateText;
           row._values = values;
+          row._position = position;
+          row._msl = msl;
           row.addEventListener('click', event => {
             event.stopPropagation();
             window.selectDrone(row.dataset.droneId);
@@ -741,20 +851,24 @@
         row.classList.toggle('selected', selected);
         row.classList.toggle('leader-row', isLeader);
         row.setAttribute('aria-pressed', String(selected));
-        row._header.textContent = `DRONE #${id}${isLeader ? ' ★LEADER' : ''}`;
+        row._title.textContent = `Drone #${id}`;
+        row._leaderBadge.hidden = !isLeader;
+        const armed = Boolean(t.armed);
+        row.classList.toggle('armed', armed);
+        row._stateDot.className = `drone-state-dot${armed ? ' armed' : ''}`;
+        row._stateText.textContent = armed ? 'ARMED' : 'DISARMED';
         const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
         const lat = finite(t.lat), lon = finite(t.lon), alt = finite(t.alt), msl = finite(t.alt_msl);
         const hSpeed = finite(t.h_speed), vSpeed = finite(t.v_speed);
         const formatted = [
-          `Lat: ${lat === null ? '—' : lat.toFixed(5)}`,
-          `Lon: ${lon === null ? '—' : lon.toFixed(5)}`,
-          `AGL: ${alt === null ? '—' : `${alt.toFixed(1)}m`}`,
-          `MSL: ${msl === null ? '—' : `${msl.toFixed(1)}m`}`,
-          `HSpd: ${hSpeed === null ? '—' : hSpeed.toFixed(1)}`,
-          `VSpd: ${vSpeed === null ? '—' : vSpeed.toFixed(1)}`,
+          alt === null ? '—' : `${alt.toFixed(1)} m`,
+          hSpeed === null ? '—' : `${hSpeed.toFixed(1)} m/s`,
+          vSpeed === null ? '—' : `${vSpeed.toFixed(1)} m/s`,
         ];
         row._values.forEach((node, index) => { node.textContent = formatted[index]; });
-        row.setAttribute('aria-label', `${row._header.textContent}. ${formatted.join(', ')}`);
+        row._position.textContent = `GPS  ${lat === null ? '—' : lat.toFixed(5)}, ${lon === null ? '—' : lon.toFixed(5)}`;
+        row._msl.textContent = `MSL  ${msl === null ? '—' : `${msl.toFixed(1)} m`}`;
+        row.setAttribute('aria-label', `Drone ${id}${isLeader ? ', leader' : ''}, ${armed ? 'armed' : 'disarmed'}. Altitude ${formatted[0]}, horizontal speed ${formatted[1]}, vertical speed ${formatted[2]}. Latitude ${lat ?? 'unavailable'}, longitude ${lon ?? 'unavailable'}, mean sea level altitude ${msl === null ? 'unavailable' : `${msl.toFixed(1)} meters`}.`);
         const index = sortedIds.indexOf(id);
         if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
       });
