@@ -48,7 +48,7 @@ class WebSocketHandler(WebSocketProtocol):
                         if "Sec-WebSocket-Key" in headers:
                             self.send_handshake(headers["Sec-WebSocket-Key"])
                             self.handshake_done = True
-                            self.server.clients.append(self)
+                            self.server.add_client(self)
                         buf = b""
                 else:
                     # Process all complete frames in buffer
@@ -69,8 +69,9 @@ class WebSocketHandler(WebSocketProtocol):
         except Exception:
             pass
         finally:
-            if self in self.server.clients:
-                self.server.clients.remove(self)
+            with self.server._broadcast_lock:
+                if self in self.server.clients:
+                    self.server.clients.remove(self)
             try:
                 self.conn.close()
             except Exception:
@@ -103,12 +104,17 @@ class IntegratedServer:
         self.clients = []
         self.running = True
 
+        # Serializes state updates, recipient capture, queue insertion, and
+        # client registration. Network delivery happens outside this lock.
+        self._broadcast_lock = threading.RLock()
+
         # Single outbound queue consumed by one sender thread (drops oldest when full)
         self._out_queue = queue.Queue(maxsize=OUTBOUND_QUEUE_SIZE)
 
-        # Telemetry deduplication: last broadcast snapshot per drone
+        # Retained state used to initialize clients that connect after the
+        # first status/telemetry broadcast.
+        self._status_snapshot = {}
         self._last_telem = {}
-        self._telem_lock = threading.Lock()
 
         # Log-rate throttle using token bucket
         self._log_tokens = LOG_RATE_LIMIT_HZ
@@ -157,29 +163,54 @@ class IntegratedServer:
         """Dedicated thread that drains the outbound queue and sends to all clients."""
         while self.running:
             try:
-                msg = self._out_queue.get(timeout=0.1)
+                msg, recipients = self._out_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-            clients_snapshot = self.clients[:]
-            for client in clients_snapshot:
+            for client in recipients:
                 client.send_message(msg)
 
-    def _enqueue(self, data_dict):
+    def add_client(self, client):
+        """Register a handshaken client and enqueue its retained state replay."""
+        with self._broadcast_lock:
+            self.clients.append(client)
+            if self._status_snapshot:
+                self._enqueue(
+                    {"type": "status", "data": dict(self._status_snapshot)},
+                    recipients=(client,),
+                )
+            if self._last_telem:
+                self._enqueue(
+                    {
+                        "type": "telemetry",
+                        "data": {
+                            sysid: dict(vals)
+                            for sysid, vals in self._last_telem.items()
+                        },
+                    },
+                    recipients=(client,),
+                )
+
+    def _enqueue(self, data_dict, recipients=None):
         msg = json.dumps(data_dict, separators=(",", ":"))
-        try:
-            self._out_queue.put_nowait(msg)
-        except queue.Full:
-            # Queue is full: drop the oldest item to make room for the newest.
-            # This is safe — the sender loop uses queue.Empty as a normal
-            # "nothing to send yet" signal; an extra Empty here is benign.
+        with self._broadcast_lock:
+            # Capture recipients at enqueue time. A client connecting later
+            # receives its own retained snapshot, never older queued updates.
+            target_clients = tuple(self.clients) if recipients is None else recipients
+            queued_message = (msg, target_clients)
             try:
-                self._out_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._out_queue.put_nowait(msg)
+                self._out_queue.put_nowait(queued_message)
             except queue.Full:
-                pass
+                # Queue is full: drop the oldest item to make room for the newest.
+                # This is safe — the sender loop uses queue.Empty as a normal
+                # "nothing to send yet" signal; an extra Empty here is benign.
+                try:
+                    self._out_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._out_queue.put_nowait(queued_message)
+                except queue.Full:
+                    pass
 
     # Kept for backwards compatibility; routes through queue
     def broadcast(self, data_dict):
@@ -188,14 +219,20 @@ class IntegratedServer:
     def broadcast_telemetry_dedup(self, data):
         """Broadcast only drone entries whose data has changed since last send."""
         changed = {}
-        with self._telem_lock:
+        with self._broadcast_lock:
             for sysid, vals in data.items():
                 prev = self._last_telem.get(sysid)
                 if prev != vals:
                     changed[sysid] = vals
                     self._last_telem[sysid] = dict(vals)
-        if changed:
-            self._enqueue({"type": "telemetry", "data": changed})
+            if changed:
+                self._enqueue({"type": "telemetry", "data": changed})
+
+    def broadcast_status(self, status_dict):
+        """Merge and broadcast status fields so reconnects get current state."""
+        with self._broadcast_lock:
+            self._status_snapshot.update(status_dict)
+            self._enqueue({"type": "status", "data": dict(status_dict)})
 
     def broadcast_log_throttled(self, text):
         """Enqueue a log message, capped at LOG_RATE_LIMIT_HZ messages per second."""
@@ -242,4 +279,4 @@ def broadcast_telemetry(data):
 def broadcast_status(status_dict):
     """Broadcast a status update (connection mode, leader, etc.) to all clients."""
     if server:
-        server._enqueue({"type": "status", "data": status_dict})
+        server.broadcast_status(status_dict)
