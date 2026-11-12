@@ -1,5 +1,5 @@
 // ======================== Configuration Constants ========================
-    const WS_URL                   = 'ws://localhost:8001';
+    const WS_URL                   = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:8001`;
     const WS_INITIAL_RETRY_DELAY   = 1000;   // ms – first reconnect delay
     const WS_MAX_DELAY             = 30000;  // ms – cap on exponential backoff
     const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
@@ -18,33 +18,39 @@
       const arrow = document.getElementById(arrowId);
       const collapsed = body.classList.toggle('collapsed');
       arrow.textContent = collapsed ? '▼' : '▲';
+      const trigger = document.querySelector(`button[aria-controls="${bodyId}"]`);
+      if (trigger) trigger.setAttribute('aria-expanded', String(!collapsed));
     }
 
     // ======================== Sidebar Toggle ========================
     function toggleSidebar(evt) {
       if (evt) evt.stopPropagation();
       const sidebar = document.getElementById('sidebar');
-      sidebar.classList.toggle('collapsed');
+      const collapsed = sidebar.classList.toggle('collapsed');
+      const button = document.getElementById('sidebar-toggle');
+      if (button) button.setAttribute('aria-expanded', String(!collapsed));
     }
 
-    // Bind sidebar toggle to any click inside the sidebar
-    const _sidebarEl = document.getElementById('sidebar');
-    if (_sidebarEl) {
-      _sidebarEl.addEventListener('click', toggleSidebar);
-    }
+    const _sidebarToggle = document.getElementById('sidebar-toggle');
+    if (_sidebarToggle) _sidebarToggle.addEventListener('click', toggleSidebar);
 
     // ======================== WebSocket with Exponential Backoff ========================
     let ws = null;
     let wsRetryDelay = WS_INITIAL_RETRY_DELAY;
-    let wsConnected = false;
+    document.getElementById('sb-mode-val').textContent = '—';
+    document.getElementById('sb-leader-val').textContent = '—';
+    document.getElementById('sb-drones-val').textContent = '—';
+    document.getElementById('active-count').textContent = '—';
+    document.getElementById('avg-alt').textContent = '—';
 
     function connectWS() {
       ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
-        wsConnected = true;
         wsRetryDelay = WS_INITIAL_RETRY_DELAY;
         document.getElementById('sb-ws-val').textContent = 'CONNECTED';
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.add('good');
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.remove('warn', 'danger');
         document.getElementById('reconnect-banner').style.display = 'none';
         document.getElementById('loading').style.display = 'none';
         log('WebSocket connected.', 'sys');
@@ -66,8 +72,9 @@
       };
 
       ws.onclose = () => {
-        wsConnected = false;
         document.getElementById('sb-ws-val').textContent = 'DISCONNECTED';
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.add('danger');
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.remove('good', 'warn');
         document.getElementById('reconnect-banner').style.display = 'block';
         log(`WebSocket closed. Retrying in ${(wsRetryDelay/1000).toFixed(1)}s…`, 'error');
         setTimeout(() => {
@@ -78,6 +85,8 @@
 
       ws.onerror = () => {
         document.getElementById('sb-ws-val').textContent = 'ERROR';
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.add('danger');
+        document.getElementById('sb-ws-val').closest('.sb-item').classList.remove('good', 'warn');
         ws.close();
       };
     }
@@ -100,28 +109,31 @@
     }
 
     // ======================== Status Sync ========================
-    let currentLeaderSysid = 1;  // Hardcoded default leader is Drone 1
+    let currentLeaderSysid = null;
 
     function applyStatus(data) {
-      if (data.mode !== undefined) {
-        document.getElementById('sb-mode-val').textContent = data.mode;
+      if (data.mode !== undefined && data.mode !== null && String(data.mode).trim()) {
+        document.getElementById('sb-mode-val').textContent = String(data.mode).toUpperCase();
       }
-      if (data.leader !== undefined) {
-        currentLeaderSysid = parseInt(data.leader);
+      if (data.leader !== undefined && data.leader !== null && Number.isFinite(Number(data.leader))) {
+        currentLeaderSysid = Number(data.leader);
         const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
         document.getElementById('sb-leader-val').textContent = label;
         syncLeaderSelect();
       }
       if (data.drone_count !== undefined) {
-        document.getElementById('sb-drones-val').textContent = data.drone_count;
+        document.getElementById('sb-drones-val').textContent = Number.isFinite(Number(data.drone_count))
+          ? String(data.drone_count) : '—';
       }
       if (data.manual_mode !== undefined) {
-        isManualModeActive = Boolean(data.manual_mode);
+        isManualModeActive = data.manual_mode === true || data.manual_mode === 1 || data.manual_mode === 'true';
+        manualModeKnown = true;
         updateManualModeUI();
       }
     }
 
     let isManualModeActive = false;
+    let manualModeKnown = false;
 
     function toggleManualMode() {
       const fState = getFormationState();
@@ -129,14 +141,19 @@
         type: 'swarm_command',
         cmd: 'manual_mode',
         ...fState,
-        alt: parseFloat(document.getElementById('cmd-alt').value) || 10,
+        alt: readFiniteInput('cmd-alt'),
       };
-      wsSend(payload);
+      if (wsSend(payload)) log('Manual mode command sent.', 'sys');
     }
 
     function updateManualModeUI() {
       const btn = document.getElementById('btn-manual-mode');
       if (!btn) return;
+      if (!manualModeKnown) {
+        btn.classList.remove('active');
+        btn.textContent = 'MANUAL MODE: STATUS UNKNOWN';
+        return;
+      }
       if (isManualModeActive) {
         btn.classList.add('active');
         btn.textContent = 'MANUAL MODE: ACTIVE (CLICK TO STOP)';
@@ -145,19 +162,43 @@
         btn.textContent = 'MANUAL MODE (RC FOLLOW)';
       }
     }
+    updateManualModeUI();
 
     // ======================== Leader Control ========================
     function onLeaderChange(val) {
-      currentLeaderSysid = parseInt(val);
-      const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
+      if (val === '') return;
+      const sysid = Number(val);
+      if (!Number.isInteger(sysid)) return;
+      const label = sysid === -1 ? 'AUTO' : `#${sysid}`;
+      if (!wsSend({ type: 'set_leader', sysid })) return;
+      currentLeaderSysid = sysid;
       document.getElementById('sb-leader-val').textContent = label;
-      wsSend({ type: 'set_leader', sysid: currentLeaderSysid });
       log(`Leader set to ${label}`, 'sys');
     }
 
     function syncLeaderSelect() {
       const sel = document.getElementById('leader-select');
-      sel.value = String(currentLeaderSysid);
+      if (!sel) return;
+      if (currentLeaderSysid === null) {
+        let waiting = [...sel.options].find(option => option.value === '');
+        if (!waiting) {
+          waiting = document.createElement('option');
+          waiting.value = '';
+          waiting.textContent = 'Awaiting leader status';
+          waiting.disabled = true;
+          sel.insertBefore(waiting, sel.firstChild);
+        }
+        sel.value = '';
+        return;
+      }
+      const value = String(currentLeaderSysid);
+      if (![...sel.options].some(option => option.value === value) && currentLeaderSysid !== -1) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = `DRONE #${value}`;
+        sel.appendChild(option);
+      }
+      sel.value = value;
     }
 
     function updateLeaderSelect() {
@@ -197,10 +238,30 @@
     // ======================== Swarm Commands ========================
     function wsSend(payload) {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
-      } else {
-        log('WebSocket not connected – command dropped.', 'error');
+        try {
+          ws.send(JSON.stringify(payload));
+          const feedback = document.getElementById('command-feedback');
+          if (feedback) feedback.textContent = 'Command transmitted over the dashboard connection.';
+          return true;
+        } catch (error) {
+          const message = `WebSocket send failed: ${error.message || error}`;
+          log(message, 'error');
+          const feedback = document.getElementById('command-feedback');
+          if (feedback) feedback.textContent = `Command not sent: ${message}`;
+          return false;
+        }
       }
+      log('WebSocket not connected – command dropped.', 'error');
+      const feedback = document.getElementById('command-feedback');
+      if (feedback) feedback.textContent = 'Command not sent: WebSocket is disconnected.';
+      return false;
+    }
+
+    function readFiniteInput(id) {
+      const raw = document.getElementById(id).value.trim();
+      if (!raw) return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
     }
 
     function swarmCmd(cmd) {
@@ -209,12 +270,30 @@
         type: 'swarm_command',
         cmd,
         ...fState,
-        lat: parseFloat(document.getElementById('cmd-lat').value) || 0,
-        lon: parseFloat(document.getElementById('cmd-lon').value) || 0,
-        alt: parseFloat(document.getElementById('cmd-alt').value) || 5,
       };
-      wsSend(payload);
-      log(`Sent: ${cmd} | formation=${payload.formation} pattern=${payload.pattern} spacing=${payload.spacing_m}m`, 'sys');
+      if (cmd === 'fly_to') {
+        const lat = readFiniteInput('cmd-lat');
+        const lon = readFiniteInput('cmd-lon');
+        const alt = readFiniteInput('cmd-alt');
+        if (lat === null || lat < -90 || lat > 90) return commandError('Latitude must be between -90 and 90.');
+        if (lon === null || lon < -180 || lon > 180) return commandError('Longitude must be between -180 and 180.');
+        if (alt === null || alt <= 0 || alt > 10000) return commandError('Altitude must be greater than 0 and at most 10,000 m.');
+        Object.assign(payload, { lat, lon, alt });
+      } else if (cmd === 'takeoff') {
+        const alt = readFiniteInput('cmd-alt');
+        if (alt === null || alt <= 0 || alt > 10000) return commandError('Altitude must be greater than 0 and at most 10,000 m.');
+        payload.alt = alt;
+      }
+      if (wsSend(payload)) {
+        log(`Sent: ${cmd}${cmd === 'fly_to' ? ` to ${payload.lat.toFixed(6)}, ${payload.lon.toFixed(6)} at ${payload.alt}m` : ''}`, 'sys');
+      }
+    }
+
+    function commandError(message) {
+      log(`Command not sent: ${message}`, 'error');
+      const feedback = document.getElementById('command-feedback');
+      if (feedback) feedback.textContent = `Command not sent: ${message}`;
+      return false;
     }
 
     // ======================== 3D Scene ========================
@@ -222,23 +301,22 @@
     let scene, camera, renderer, controls;
     let trackerRenderer, trackerCamera;
     let selectedDroneId = null;
-    let isDropdownOpen = false;
+    let isDropdownOpen = true;
+    document.getElementById('drone-list').classList.add('open');
+    document.querySelector('button[aria-controls="drone-list"]').setAttribute('aria-expanded', 'true');
 
     function toggleDropdown() {
       isDropdownOpen = !isDropdownOpen;
       document.getElementById('drone-list').classList.toggle('open', isDropdownOpen);
       document.getElementById('arrow').textContent = isDropdownOpen ? '▲' : '▼';
-      document.querySelector('.overlay h2 button').setAttribute('aria-expanded', String(isDropdownOpen));
+      document.querySelector('button[aria-controls="drone-list"]').setAttribute('aria-expanded', String(isDropdownOpen));
+      if (isDropdownOpen) renderDroneList();
     }
 
     window.selectDrone = function (id) {
       selectedDroneId = id;
       document.getElementById('tracker-label').textContent = `TRACKING: #${id}`;
       renderDroneList();
-      if (drones[id] && drones[id].telemetry) {
-        document.getElementById('cmd-lat').value = drones[id].telemetry.lat.toFixed(6);
-        document.getElementById('cmd-lon').value = drones[id].telemetry.lon.toFixed(6);
-      }
     };
 
     function init3D() {
@@ -248,20 +326,18 @@
       scene.background = new THREE.Color(0x101820);
       scene.fog = new THREE.Fog(0x101820, 100, 5000);
 
-      camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 50000);
+      camera = new THREE.PerspectiveCamera(60, 1, 0.1, 50000);
       camera.position.set(0, 85, 105);
 
       renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(container.clientWidth, container.clientHeight);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.appendChild(renderer.domElement);
 
       // Tracker
       const trackerEl = document.getElementById('tracker-view');
       trackerRenderer = new THREE.WebGLRenderer({ antialias: true });
-      trackerRenderer.setSize(trackerEl.clientWidth, trackerEl.clientHeight);
       trackerEl.appendChild(trackerRenderer.domElement);
-      trackerCamera = new THREE.PerspectiveCamera(50, trackerEl.clientWidth / trackerEl.clientHeight, 0.1, 2000);
+      trackerCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
@@ -294,12 +370,14 @@
         }
 
         // Prop spin
-        Object.values(drones).forEach(d => { if (d.props) d.props.rotation.y += 0.4; });
+        Object.values(drones).forEach(d => {
+          if (d.rotors) d.rotors.forEach((rotor, index) => { rotor.rotation.y += index % 2 ? -0.4 : 0.4; });
+        });
 
         // ---- Collision proximity check (runs every frame, cheap pairwise) ----
         checkCollisionProximity();
 
-        renderer.render(scene, camera);
+        if (renderer.domElement.width > 0 && renderer.domElement.height > 0) renderer.render(scene, camera);
 
         // Tracker
         if (selectedDroneId && drones[selectedDroneId]) {
@@ -307,18 +385,34 @@
           trackerCamera.position.copy(pos).add(new THREE.Vector3(8, 8, 8));
           trackerCamera.lookAt(pos);
           // Only render tracker if its panel is expanded
-          if (!document.getElementById('tracker-body').classList.contains('collapsed')) {
+          if (!document.getElementById('tracker-body').classList.contains('collapsed') &&
+              trackerRenderer.domElement.width > 0 && trackerRenderer.domElement.height > 0) {
             trackerRenderer.render(scene, trackerCamera);
           }
         }
       }
       animate();
 
-      window.addEventListener('resize', () => {
-        camera.aspect = container.clientWidth / container.clientHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(container.clientWidth, container.clientHeight);
-      });
+      function resizeRendererToBounds(target, targetRenderer, targetCamera) {
+        const bounds = target.getBoundingClientRect();
+        const width = Math.floor(bounds.width);
+        const height = Math.floor(bounds.height);
+        if (width <= 0 || height <= 0) return;
+        targetRenderer.setSize(width, height, false);
+        targetCamera.aspect = width / height;
+        targetCamera.updateProjectionMatrix();
+      }
+      function resizeScenes() {
+        resizeRendererToBounds(container, renderer, camera);
+        resizeRendererToBounds(trackerEl, trackerRenderer, trackerCamera);
+      }
+      if (window.ResizeObserver) {
+        const sceneResizeObserver = new ResizeObserver(resizeScenes);
+        sceneResizeObserver.observe(container);
+        sceneResizeObserver.observe(trackerEl);
+      }
+      window.addEventListener('resize', resizeScenes);
+      requestAnimationFrame(resizeScenes);
     }
 
     // ======================== Collision Proximity Check ========================
@@ -373,19 +467,51 @@
 
     init3D();
 
-    // Cache body materials per drone for fast tinting
-    const _droneTintCache = {};
+    const defaultCameraPosition = new THREE.Vector3(0, 85, 105);
+    window.fitFleet = function () {
+      const entries = Object.values(drones).filter(drone => drone.telemetry);
+      const points = entries.map(drone => drone.mesh.position);
+      const center = points.length
+        ? points.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / points.length)
+        : new THREE.Vector3(0, 0, 0);
+      const halfWidth = points.length ? Math.max(...points.map(point => Math.abs(point.x - center.x))) : 20;
+      const halfDepth = points.length ? Math.max(...points.map(point => Math.abs(point.z - center.z))) : 20;
+      const halfHeight = points.length ? Math.max(...points.map(point => Math.abs(point.y - center.y))) : 5;
+      const bounds = document.getElementById('canvas-container').getBoundingClientRect();
+      const aspect = bounds.width > 0 && bounds.height > 0 ? bounds.width / bounds.height : 1;
+      const fov = THREE.MathUtils.degToRad(camera.fov);
+      const horizontalFov = 2 * Math.atan(Math.tan(fov / 2) * aspect);
+      const distance = Math.max(20, (Math.max(halfWidth / Math.tan(horizontalFov / 2), halfDepth / Math.tan(fov / 2), halfHeight) + 8) * 1.35);
+      const direction = new THREE.Vector3(1, 0.85, 1).normalize();
+      controls.target.copy(center);
+      camera.up.set(0, 1, 0);
+      camera.position.copy(center).addScaledVector(direction, distance);
+      camera.near = Math.max(0.1, distance / 1000);
+      camera.far = Math.max(50000, distance * 20);
+      camera.updateProjectionMatrix();
+      controls.update();
+    };
+    window.setTopView = function () {
+      const center = controls.target.clone();
+      const distance = Math.max(20, camera.position.distanceTo(center));
+      camera.position.set(center.x, center.y + distance, center.z + 0.001);
+      camera.up.set(0, 0, -1);
+      camera.lookAt(center);
+      controls.update();
+    };
+    window.resetView = function () {
+      controls.target.set(0, 0, 0);
+      camera.up.set(0, 1, 0);
+      camera.position.copy(defaultCameraPosition);
+      camera.near = 0.1;
+      camera.far = 50000;
+      camera.updateProjectionMatrix();
+      controls.update();
+    };
+
     function setDroneTint(sysid, color) {
       if (!drones[sysid]) return;
-      if (!_droneTintCache[sysid]) {
-        // Find the body mesh (first child that is a Mesh with MeshPhongMaterial)
-        drones[sysid].mesh.children.forEach(child => {
-          if (child.isMesh && child.material && child.material.isMeshPhongMaterial) {
-            _droneTintCache[sysid] = child.material;
-          }
-        });
-      }
-      const mat = _droneTintCache[sysid];
+      const mat = drones[sysid].bodyMaterial;
       if (mat && mat.color.getHex() !== color) {
         mat.color.setHex(color);
         mat.emissive.setHex(
@@ -397,52 +523,74 @@
     // ======================== Drone 3D Objects ========================
     function createDrone(sysid) {
       const group = new THREE.Group();
-
-      const mat = new THREE.MeshPhongMaterial({
+      const bodyMaterial = new THREE.MeshPhongMaterial({
         color: DRONE_NORMAL_COLOR, emissive: DRONE_NORMAL_EMISSIVE, emissiveIntensity: 0.5
       });
-      const body = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10), mat);
-      body.scale.set(1.25, 0.55, 1);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.16, 0.34), bodyMaterial);
+      body.position.y = 0.02;
       group.add(body);
 
-      const armMat = new THREE.MeshPhongMaterial({ color: 0xa8b8b7, shininess: 45 });
-      const armGeom = new THREE.CylinderGeometry(0.035, 0.055, 1.1, 8);
-      const arm1 = new THREE.Mesh(armGeom, armMat); arm1.rotation.z = Math.PI / 2; arm1.rotation.y = Math.PI / 4;
-      const arm2 = new THREE.Mesh(armGeom, armMat); arm2.rotation.z = Math.PI / 2; arm2.rotation.y = -Math.PI / 4;
-      group.add(arm1); group.add(arm2);
+      const armMaterial = new THREE.MeshPhongMaterial({ color: 0x9aadaa, shininess: 55 });
+      const motorMaterial = new THREE.MeshPhongMaterial({ color: 0x202a30, shininess: 70 });
+      const rotorBladeMaterial = new THREE.MeshBasicMaterial({ color: 0xc3d1cf, transparent: true, opacity: 0.78 });
+      const motorPoints = [
+        { x: 0.62, z: 0.62 }, { x: -0.62, z: 0.62 },
+        { x: 0.62, z: -0.62 }, { x: -0.62, z: -0.62 },
+      ];
+      const armGeometry = new THREE.CylinderGeometry(0.035, 0.045, 1, 8);
+      const rotors = [];
+      motorPoints.forEach(point => {
+        const end = new THREE.Vector3(point.x, 0, point.z);
+        const arm = new THREE.Mesh(armGeometry, armMaterial);
+        arm.position.copy(end).multiplyScalar(0.5);
+        arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().normalize());
+        arm.scale.y = end.length();
+        group.add(arm);
 
-      const propGroup = new THREE.Group();
-      const propGeom = new THREE.CylinderGeometry(0.22, 0.22, 0.018, 16);
-      const propMat = new THREE.MeshBasicMaterial({ color: 0xc3d1cf, transparent: true, opacity: 0.68 });
-      [{ x: 0.42, z: 0.42 }, { x: -0.42, z: -0.42 }, { x: 0.42, z: -0.42 }, { x: -0.42, z: 0.42 }].forEach(p => {
-        const prop = new THREE.Mesh(propGeom, propMat);
-        prop.position.set(p.x, 0.1, p.z);
-        propGroup.add(prop);
+        const rotor = new THREE.Group();
+        rotor.position.set(point.x, 0.11, point.z);
+        const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.12, 12), motorMaterial);
+        rotor.add(motor);
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.018, 0.055), rotorBladeMaterial);
+        blade.position.y = 0.075;
+        rotor.add(blade);
+        group.add(rotor);
+        rotors.push(rotor);
       });
-      group.add(propGroup);
 
       // Label
       const lCanvas = document.createElement('canvas');
-      lCanvas.width = 64; lCanvas.height = 32;
+      lCanvas.width = 256; lCanvas.height = 96;
       const ctx = lCanvas.getContext('2d');
-      ctx.fillStyle = '#55d6be';
-      ctx.font = 'bold 20px monospace';
-      ctx.fillText(`#${sysid}`, 4, 24);
+      ctx.fillStyle = 'rgba(8, 18, 23, 0.86)';
+      ctx.beginPath();
+      ctx.roundRect(3, 3, 250, 90, 20);
+      ctx.fill();
+      ctx.strokeStyle = '#55d6be';
+      ctx.lineWidth = 5;
+      ctx.stroke();
+      ctx.fillStyle = '#d8fff8';
+      ctx.font = 'bold 58px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`#${sysid}`, 128, 49);
       const sprite = new THREE.Sprite(
         new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lCanvas) })
       );
-      sprite.position.y = 1.2;
-      sprite.scale.set(2, 1, 1);
+      sprite.position.y = 1.65;
+      sprite.center.set(0.32, 0.5);
+      sprite.scale.set(4.2, 1.575, 1);
       group.add(sprite);
 
       group.position.set(0, 0, 0);
       scene.add(group);
-      return { mesh: group, props: propGroup };
+      return { mesh: group, bodyMaterial, rotors };
     }
 
     // ======================== Telemetry Processing ========================
     window.homeRef = null;
     let lastListUpdate = 0;
+    let listRenderTimer = null;
 
     function updateSwarm(data) {
       // Set home reference from first valid fix
@@ -490,14 +638,17 @@
       document.getElementById('sb-drones-val').textContent = activeCount;
 
       let totalAlt = 0;
-      allDrones.forEach(d => { if (d.telemetry) totalAlt += d.telemetry.alt; });
+      allDrones.forEach(d => {
+        const altitude = d.telemetry && Number(d.telemetry.alt);
+        if (Number.isFinite(altitude)) totalAlt += altitude;
+      });
       document.getElementById('avg-alt').textContent =
         activeCount > 0 ? (totalAlt / activeCount).toFixed(1) + 'm' : '0.0m';
 
       // Leader position display
       const leaderSysid = currentLeaderSysid === -1
         ? (Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b))[0] || null)
-        : String(currentLeaderSysid);
+        : (currentLeaderSysid === null ? null : String(currentLeaderSysid));
 
       const leaderPosEl = document.getElementById('leader-pos');
       if (leaderSysid && drones[leaderSysid] && drones[leaderSysid].telemetry) {
@@ -508,13 +659,30 @@
         leaderPosEl.textContent = 'WAITING…';
       }
 
-      if (newDroneAdded) updateLeaderSelect();
+      if (newDroneAdded) {
+        if (listRenderTimer) clearTimeout(listRenderTimer);
+        listRenderTimer = null;
+        updateLeaderSelect();
+        renderDroneList();
+        lastListUpdate = Date.now();
+      }
+      if (newDroneAdded) window.fitFleet();
 
-      if (isDropdownOpen) {
+      if (isDropdownOpen && !newDroneAdded) {
         const now = Date.now();
         if (now - lastListUpdate > DRONE_LIST_UPDATE_MS) {
           renderDroneList();
           lastListUpdate = now;
+          if (listRenderTimer) clearTimeout(listRenderTimer);
+          listRenderTimer = null;
+        } else if (!listRenderTimer) {
+          listRenderTimer = setTimeout(() => {
+            listRenderTimer = null;
+            if (isDropdownOpen) {
+              renderDroneList();
+              lastListUpdate = Date.now();
+            }
+          }, DRONE_LIST_UPDATE_MS - (now - lastListUpdate));
         }
       }
     }
@@ -523,30 +691,74 @@
       const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
       const leaderSysid = currentLeaderSysid === -1
         ? (sortedIds[0] || null)
-        : String(currentLeaderSysid);
-
-      let html = '';
-      sortedIds.forEach(id => {
-        const t = drones[id].telemetry;
-        const selected = id === selectedDroneId ? 'selected' : '';
-        const isLeader = id === leaderSysid ? 'leader-row' : '';
-        const leaderBadge = id === leaderSysid ? ' ★LEADER' : '';
-        if (t) {
-          html += `
-            <div class="drone-row ${selected} ${isLeader}"
-                 onclick="event.stopPropagation();selectDrone('${id}')">
-              <div class="header">DRONE #${id}${leaderBadge}</div>
-              <div class="details">
-                <span>Lat: ${t.lat.toFixed(5)}</span>
-                <span>Lon: ${t.lon.toFixed(5)}</span>
-                <span>AGL: ${t.alt.toFixed(1)}m</span>
-                <span>MSL: ${(t.alt_msl||0).toFixed(1)}m</span>
-                <span>HSpd: ${t.h_speed.toFixed(1)}</span>
-                <span>VSpd: ${t.v_speed.toFixed(1)}</span>
-              </div>
-            </div>`;
+        : (currentLeaderSysid === null ? null : String(currentLeaderSysid));
+      const list = document.getElementById('drone-list');
+      const focused = document.activeElement;
+      let focusedDroneId = focused && focused.dataset ? focused.dataset.droneId : null;
+      const currentRows = new Map([...list.querySelectorAll('button.drone-row')].map(row => [row.dataset.droneId, row]));
+      const requiredIds = new Set(sortedIds);
+      currentRows.forEach((row, id) => {
+        if (!requiredIds.has(id)) {
+          row.remove();
+          currentRows.delete(id);
         }
       });
-      document.getElementById('drone-list').innerHTML = html;
+      sortedIds.forEach(id => {
+        const t = drones[id].telemetry;
+        if (!t) return;
+        let row = currentRows.get(id);
+        if (!row) {
+          row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'drone-row';
+          row.style.display = 'block';
+          row.style.width = '100%';
+          row.style.textAlign = 'left';
+          row.dataset.droneId = id;
+          const header = document.createElement('span');
+          header.className = 'header';
+          header.style.display = 'block';
+          const details = document.createElement('span');
+          details.className = 'details';
+          const values = ['Lat', 'Lon', 'AGL', 'MSL', 'HSpd', 'VSpd'].map(label => {
+            const value = document.createElement('span');
+            value.dataset.label = label;
+            details.appendChild(value);
+            return value;
+          });
+          row.append(header, details);
+          row._header = header;
+          row._values = values;
+          row.addEventListener('click', event => {
+            event.stopPropagation();
+            window.selectDrone(row.dataset.droneId);
+          });
+          currentRows.set(id, row);
+        }
+        const selected = id === selectedDroneId;
+        const isLeader = id === leaderSysid;
+        row.classList.toggle('selected', selected);
+        row.classList.toggle('leader-row', isLeader);
+        row.setAttribute('aria-pressed', String(selected));
+        row._header.textContent = `DRONE #${id}${isLeader ? ' ★LEADER' : ''}`;
+        const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+        const lat = finite(t.lat), lon = finite(t.lon), alt = finite(t.alt), msl = finite(t.alt_msl);
+        const hSpeed = finite(t.h_speed), vSpeed = finite(t.v_speed);
+        const formatted = [
+          `Lat: ${lat === null ? '—' : lat.toFixed(5)}`,
+          `Lon: ${lon === null ? '—' : lon.toFixed(5)}`,
+          `AGL: ${alt === null ? '—' : `${alt.toFixed(1)}m`}`,
+          `MSL: ${msl === null ? '—' : `${msl.toFixed(1)}m`}`,
+          `HSpd: ${hSpeed === null ? '—' : hSpeed.toFixed(1)}`,
+          `VSpd: ${vSpeed === null ? '—' : vSpeed.toFixed(1)}`,
+        ];
+        row._values.forEach((node, index) => { node.textContent = formatted[index]; });
+        row.setAttribute('aria-label', `${row._header.textContent}. ${formatted.join(', ')}`);
+        const index = sortedIds.indexOf(id);
+        if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+      });
+      if (focusedDroneId && currentRows.has(focusedDroneId) && document.activeElement !== currentRows.get(focusedDroneId)) {
+        currentRows.get(focusedDroneId).focus({ preventScroll: true });
+      }
     }
   
