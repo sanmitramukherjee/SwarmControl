@@ -56,13 +56,21 @@ def segment_clear_of_point(start, end, point, min_sep_m=COLLISION_WARN_M):
     """
     lat0 = start[0]
     metres_lat, metres_lon = _meters_to_deg(lat0)
+
     def xyz(position):
-        return ((position[1] - start[1]) * metres_lon,
-                (position[0] - start[0]) * metres_lat,
-                position[2] - start[2])
+        return (
+            (position[1] - start[1]) * metres_lon,
+            (position[0] - start[0]) * metres_lat,
+            position[2] - start[2],
+        )
+
     b, p = xyz(end), xyz(point)
     length2 = sum(v * v for v in b)
-    fraction = max(0.0, min(1.0, sum(b[i] * p[i] for i in range(3)) / length2)) if length2 else 0.0
+    fraction = (
+        max(0.0, min(1.0, sum(b[i] * p[i] for i in range(3)) / length2))
+        if length2
+        else 0.0
+    )
     distance2 = sum((p[i] - fraction * b[i]) ** 2 for i in range(3))
     return distance2 >= min_sep_m * min_sep_m
 

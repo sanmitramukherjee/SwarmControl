@@ -23,3 +23,5 @@ SERIAL_DISPATCH_SPACING_S = 0.25
 TAKEOFF_TIMEOUT_S = 60.0
 LAND_TIMEOUT_S = 120.0
 NAV_TIMEOUT_S = 180.0
+# SITL group's default horizontal travel speed, used for synchronized path checks.
+NAV_SPEED_ASSUMED_MPS = 10.0
