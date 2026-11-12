@@ -531,7 +531,7 @@
       group.add(body);
 
       const armMaterial = new THREE.MeshPhongMaterial({ color: 0x9aadaa, shininess: 55 });
-      const motorMaterial = new THREE.MeshPhongMaterial({ color: 0x202a30, shininess: 70 });
+      const motorMaterial = new THREE.MeshPhongMaterial({ color: 0xa9bdc5, shininess: 70 });
       const rotorBladeMaterial = new THREE.MeshBasicMaterial({ color: 0xc3d1cf, transparent: true, opacity: 0.78 });
       const motorPoints = [
         { x: 0.62, z: 0.62 }, { x: -0.62, z: 0.62 },
@@ -578,8 +578,9 @@
         new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lCanvas) })
       );
       sprite.position.y = 1.65;
-      sprite.center.set(0.32, 0.5);
-      sprite.scale.set(4.2, 1.575, 1);
+      // Offset in screen space so overhead labels never cover the airframe.
+      sprite.center.set(0.5, -0.65);
+      sprite.scale.set(2.8, 1.05, 1);
       group.add(sprite);
 
       group.position.set(0, 0, 0);
@@ -761,4 +762,3 @@
         currentRows.get(focusedDroneId).focus({ preventScroll: true });
       }
     }
-  
