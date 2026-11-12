@@ -114,6 +114,7 @@ def main():
                 "mode": mode.upper(),
                 "drone_count": len(drone_list),
                 "leader": 1,
+                "manual_mode": False,
             }
         )
     except ImportError:
