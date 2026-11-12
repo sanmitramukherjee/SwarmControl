@@ -124,9 +124,9 @@ class BaseDroneHandler:
         if self.connection:
             takeoff(self.connection, self.sysid, altitude)
 
-    def fly_to_gps(self, lat, lon, alt):
+    def fly_to_gps(self, lat, lon, alt, set_guided=True):
         if self.connection:
-            fly_to_gps(self.connection, self.sysid, lat, lon, alt)
+            fly_to_gps(self.connection, self.sysid, lat, lon, alt, set_guided=set_guided)
 
     def rtl(self):
         if self.connection:

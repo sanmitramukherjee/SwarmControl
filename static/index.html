@@ -294,6 +294,13 @@
     .swarm-btn.success:hover { background: rgba(0,255,157,0.1); }
     .swarm-btn.accent   { background: var(--accent); border: none; color: #000; font-weight: bold; }
     .swarm-btn.accent:hover { background: #00b8da; }
+    .swarm-btn.manual   { background: #ff9800; border: none; color: #000; font-weight: bold; }
+    .swarm-btn.manual:hover { background: #e68900; }
+    .swarm-btn.manual.active { background: #4caf50; color: #fff; animation: pulse-manual 1.5s infinite; }
+    @keyframes pulse-manual {
+      0%, 100% { box-shadow: 0 0 4px #4caf50; }
+      50% { box-shadow: 0 0 12px #00ff9d; }
+    }
     .swarm-btn.danger   { border-color: var(--danger); color: var(--danger); }
     .swarm-btn.danger:hover { background: rgba(255,71,87,0.1); }
 
@@ -457,6 +464,7 @@
               <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
               <button class="swarm-btn" onclick="swarmCmd('takeoff')" style="border-color:var(--accent);color:var(--accent)">TAKEOFF</button>
               <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
+              <button class="swarm-btn manual span2" id="btn-manual-mode" onclick="toggleManualMode()">MANUAL MODE (RC FOLLOW)</button>
               <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
               <button class="swarm-btn" onclick="swarmCmd('land')" style="border-color:var(--accent);color:var(--accent)">LAND</button>
               <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')">DISARM (EMERGENCY)</button>
@@ -601,6 +609,35 @@
       }
       if (data.drone_count !== undefined) {
         document.getElementById('sb-drones-val').textContent = data.drone_count;
+      }
+      if (data.manual_mode !== undefined) {
+        isManualModeActive = Boolean(data.manual_mode);
+        updateManualModeUI();
+      }
+    }
+
+    let isManualModeActive = false;
+
+    function toggleManualMode() {
+      const fState = getFormationState();
+      const payload = {
+        type: 'swarm_command',
+        cmd: 'manual_mode',
+        ...fState,
+        alt: parseFloat(document.getElementById('cmd-alt').value) || 10,
+      };
+      wsSend(payload);
+    }
+
+    function updateManualModeUI() {
+      const btn = document.getElementById('btn-manual-mode');
+      if (!btn) return;
+      if (isManualModeActive) {
+        btn.classList.add('active');
+        btn.textContent = 'MANUAL MODE: ACTIVE (CLICK TO STOP)';
+      } else {
+        btn.classList.remove('active');
+        btn.textContent = 'MANUAL MODE (RC FOLLOW)';
       }
     }
 
