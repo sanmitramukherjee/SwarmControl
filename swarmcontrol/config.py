@@ -10,15 +10,18 @@ METERS_PER_DEG_LON_EQ = (
 WEB_DASH_URL = "http://localhost:8000/index.html"
 
 # ---- Collision Avoidance ----
-# Minimum 3-D separation (metres) below which a collision warning is issued and
-# vertical stagger is applied automatically.
+# Minimum planned separation in metres. Unsafe paths are rejected.
 COLLISION_WARN_M = 1.5
-# Vertical altitude increment (metres) added per drone index when flying to the
-# same lat/lon without a formation pattern, preventing mid-air convergence.
-COLLISION_ALT_STEP_M = 2.5
+# Minimum lateral spacing allowed in a requested formation.
+MIN_FORMATION_SPACING_M = 3.0
 # Seconds between each consecutive drone takeoff when staggering launch.
 TAKEOFF_STAGGER_S = 1.5
 # Inactivity timeout (seconds) before hovering drones RTL
 INACTIVITY_RTL_TIMEOUT_S = 30.0
 # Minimum interval (seconds) between sequential command dispatches on a shared serial bus
 SERIAL_DISPATCH_SPACING_S = 0.25
+TAKEOFF_TIMEOUT_S = 60.0
+LAND_TIMEOUT_S = 120.0
+NAV_TIMEOUT_S = 180.0
+# SITL group's default horizontal travel speed, used for synchronized path checks.
+NAV_SPEED_ASSUMED_MPS = 10.0

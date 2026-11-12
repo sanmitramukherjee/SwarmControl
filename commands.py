@@ -38,7 +38,7 @@ def disarm_drone(connection, systemID):
     )
 
 
-def takeoff(connection, systemID, altitude):
+def prepare_takeoff(connection, systemID):
     print(f"[Drone {systemID}] Switching to GUIDED mode...")
     connection.mav.set_mode_send(
         systemID,
@@ -46,12 +46,19 @@ def takeoff(connection, systemID, altitude):
         4,  # 4 = GUIDED for ArduCopter
     )
     arm_drone(connection, systemID)
-    time.sleep(1)
 
+
+def start_takeoff(connection, systemID, altitude):
     print(f"[Drone {systemID}] Takeoff to {altitude}m")
     connection.mav.command_long_send(
         systemID, 1, mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, 0, altitude
     )
+
+
+def takeoff(connection, systemID, altitude):
+    prepare_takeoff(connection, systemID)
+    time.sleep(1)
+    start_takeoff(connection, systemID, altitude)
 
 
 def fly_to_gps(connection, systemID, lat, lon, alt, set_guided=True):

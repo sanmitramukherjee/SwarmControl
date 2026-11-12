@@ -4,7 +4,16 @@ import time
 
 from pymavlink import mavutil
 
-from commands import arm_drone, disarm_drone, fly_to_gps, land, rtl, takeoff
+from commands import (
+    arm_drone,
+    disarm_drone,
+    fly_to_gps,
+    land,
+    prepare_takeoff,
+    rtl,
+    start_takeoff,
+    takeoff,
+)
 
 from .config import DATA_STREAM_RATE_HZ
 
@@ -124,9 +133,19 @@ class BaseDroneHandler:
         if self.connection:
             takeoff(self.connection, self.sysid, altitude)
 
+    def prepare_takeoff(self):
+        if self.connection:
+            prepare_takeoff(self.connection, self.sysid)
+
+    def start_takeoff(self, altitude):
+        if self.connection:
+            start_takeoff(self.connection, self.sysid, altitude)
+
     def fly_to_gps(self, lat, lon, alt, set_guided=True):
         if self.connection:
-            fly_to_gps(self.connection, self.sysid, lat, lon, alt, set_guided=set_guided)
+            fly_to_gps(
+                self.connection, self.sysid, lat, lon, alt, set_guided=set_guided
+            )
 
     def rtl(self):
         if self.connection:

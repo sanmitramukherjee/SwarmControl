@@ -1,1050 +1,124 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SwarmControl – Drone Swarm Command Center</title>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-
-  <style>
-    :root {
-      --bg-dark: #0f1115;
-      --bg-panel: #1a1d24;
-      --accent: #00d4ff;
-      --text-primary: #ffffff;
-      --text-secondary: #8b9bb4;
-      --border: #2f3640;
-      --success: #00ff9d;
-      --danger: #ff4757;
-      --warning: #ffc107;
-    }
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      font-family: 'Inter', sans-serif;
-      background-color: var(--bg-dark);
-      color: var(--text-primary);
-      height: 100vh;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
-
-    /* ---- Top Status Bar ---- */
-    #status-bar {
-      display: flex;
-      align-items: center;
-      gap: 24px;
-      background: var(--bg-panel);
-      border-bottom: 1px solid var(--border);
-      padding: 6px 18px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      flex-shrink: 0;
-      flex-wrap: wrap;
-    }
-
-    #status-bar .sb-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--text-secondary);
-    }
-
-    #status-bar .sb-item .val {
-      color: var(--accent);
-      font-weight: 700;
-    }
-
-    #status-bar .sb-item.good .val { color: var(--success); }
-    #status-bar .sb-item.warn .val { color: var(--warning); }
-    #status-bar .sb-item.danger .val { color: var(--danger); }
-
-    #reconnect-banner {
-      display: none;
-      background: #7a1c1c;
-      color: #ffaaaa;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      padding: 5px 18px;
-      flex-shrink: 0;
-    }
-
-    /* ---- Main layout ---- */
-    #main-layout {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    /* ---- Sidebar (Logs) – collapsible ---- */
-    #sidebar {
-      width: 22%;
-      min-width: 22%;
-      flex: 0 0 22%;
-      background-color: var(--bg-panel);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      z-index: 10;
-      transition: width 0.25s ease, min-width 0.25s ease;
-      overflow: hidden;
-    }
-
-    #sidebar.collapsed {
-      width: 36px;
-      min-width: 36px;
-      flex-basis: 36px;
-    }
-
-    .sidebar-header {
-      padding: 12px 15px;
-      border-bottom: 1px solid var(--border);
-      font-family: 'JetBrains Mono', monospace;
-      font-weight: 700;
-      font-size: 12px;
-      color: var(--accent);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .sidebar-header:hover { background: rgba(0,212,255,0.05); }
-
-    #sidebar-toggle {
-      background: none;
-      border: none;
-      color: var(--accent);
-      font-size: 13px;
-      cursor: pointer;
-      padding: 0 0 0 8px;
-      line-height: 1;
-      flex-shrink: 0;
-      transition: transform 0.25s ease;
-    }
-    #sidebar.collapsed #sidebar-toggle { transform: rotate(180deg); }
-
-    /* Hide the label text (but not the button) when collapsed */
-    #sidebar.collapsed .sidebar-title { display: none; }
-
-    .blink { animation: blinker 1s linear infinite; }
-    @keyframes blinker { 50% { opacity: 0; } }
-
-    #log-container {
-      flex: 1;
-      overflow-y: auto;
-      padding: 10px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: var(--text-secondary);
-      /* Allow sidebar to shrink cleanly when collapsed */
-      min-width: 0;
-    }
-
-    .log-entry { margin-bottom: 3px; word-wrap: break-word; border-left: 2px solid transparent; padding-left: 5px; }
-    .log-entry.error { color: var(--danger); border-left-color: var(--danger); }
-    .log-entry.info  { color: var(--text-primary); }
-    .log-entry.sys   { color: var(--accent); }
-    #log-container::-webkit-scrollbar { width: 4px; }
-    #log-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    /* ---- 3D View ---- */
-    #main-view {
-      flex: 1;
-      position: relative;
-      background: linear-gradient(to bottom, #050505, #12151a);
-    }
-
-    #canvas-container { width: 100%; height: 100%; }
-
-    #loading {
-      position: absolute; top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--accent);
-      background: rgba(0,0,0,0.8);
-      padding: 20px; border-radius: 5px;
-      z-index: 100;
-    }
-
-    /* ---- Overlay (drone list) ---- */
-    .overlay {
-      position: absolute; top: 15px; left: 15px;
-      background: rgba(15,17,21,0.93);
-      border: 1px solid var(--border);
-      padding: 14px; border-radius: 8px;
-      backdrop-filter: blur(5px);
-      pointer-events: auto;
-      max-height: 80vh;
-      display: flex; flex-direction: column;
-      width: 240px;
-    }
-
-    .overlay h2 {
-      font-size: 12px; color: var(--text-secondary);
-      margin-bottom: 8px; text-transform: uppercase;
-      letter-spacing: 1px; cursor: pointer;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .overlay h2:hover { color: var(--text-primary); }
-
-    .stat-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin-bottom: 8px; }
-    .stat-item .label { font-size: 9px; color: var(--text-secondary); }
-    .stat-item .value { font-size: 16px; font-family: 'JetBrains Mono', monospace; color: var(--accent); }
-
-    #drone-list { display: none; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; overflow-y: auto; flex: 1; }
-    #drone-list.open { display: block; }
-
-    .drone-row {
-      margin-bottom: 6px; padding: 7px;
-      background: rgba(255,255,255,0.03);
-      border-radius: 4px; font-size: 10px;
-      font-family: 'JetBrains Mono', monospace;
-      cursor: pointer; transition: background 0.2s;
-    }
-    .drone-row:hover { background: rgba(255,255,255,0.07); }
-    .drone-row.selected { background: rgba(0,212,255,0.18); border-left: 3px solid var(--accent); }
-    .drone-row.leader-row { border-left: 3px solid var(--warning); }
-    .drone-row.selected.leader-row { background: rgba(255,193,7,0.15); }
-    .drone-row .header { color: var(--accent); font-weight: bold; margin-bottom: 3px; }
-    .drone-row.leader-row .header { color: var(--warning); }
-    .drone-row .details { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; color: var(--text-secondary); }
-
-    /* ---- Right Sidebar ---- */
-    #right-sidebar {
-      position: absolute; top: 15px; right: 15px;
-      width: 285px; display: flex; flex-direction: column; gap: 12px;
-      pointer-events: none;
-      /* Use 100% of #main-view height minus top/bottom margins */
-      max-height: calc(100% - 30px);
-      overflow-y: auto;
-    }
-
-    #right-sidebar::-webkit-scrollbar { width: 4px; }
-    #right-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-    .panel {
-      background: rgba(15,17,21,0.93);
-      border: 1px solid var(--border);
-      border-radius: 8px; padding: 13px;
-      backdrop-filter: blur(5px);
-      pointer-events: auto;
-    }
-
-    .panel-title {
-      font-size: 11px; color: var(--text-secondary);
-      margin-bottom: 10px; text-transform: uppercase;
-      letter-spacing: 1px; cursor: pointer;
-      display: flex; justify-content: space-between; align-items: center;
-      user-select: none;
-    }
-    .panel-title:hover { color: var(--text-primary); }
-    .panel-title .toggle-arrow { font-size: 9px; }
-
-    .panel-body { }
-    .panel-body.collapsed { display: none; }
-
-    #tracker-view {
-      width: 100%; height: 160px;
-      background: #000; border-radius: 4px;
-      border: 1px solid var(--accent);
-      position: relative; overflow: hidden;
-      margin-bottom: 5px;
-    }
-
-    #tracker-label {
-      position: absolute; top: 5px; left: 5px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px; color: var(--accent);
-      background: rgba(0,0,0,0.6);
-      padding: 2px 5px; z-index: 10;
-    }
-
-    /* ---- Form controls ---- */
-    .ctrl-group { margin-bottom: 8px; }
-    .ctrl-label { font-size: 9px; color: var(--text-secondary); display: block; margin-bottom: 2px; }
-    .ctrl-input {
-      width: 100%;
-      background: #000; border: 1px solid var(--border);
-      color: #fff; padding: 4px 6px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px; border-radius: 3px;
-    }
-    .ctrl-input:focus { outline: none; border-color: var(--accent); }
-    select.ctrl-input { cursor: pointer; }
-
-    .ctrl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-
-    .swarm-btn {
-      background: var(--bg-panel);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      padding: 6px; font-size: 10px;
-      cursor: pointer; border-radius: 3px;
-      font-family: 'JetBrains Mono', monospace;
-      transition: all 0.15s;
-    }
-    .swarm-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .swarm-btn.success  { border-color: var(--success); color: var(--success); }
-    .swarm-btn.success:hover { background: rgba(0,255,157,0.1); }
-    .swarm-btn.accent   { background: var(--accent); border: none; color: #000; font-weight: bold; }
-    .swarm-btn.accent:hover { background: #00b8da; }
-    .swarm-btn.manual   { background: #ff9800; border: none; color: #000; font-weight: bold; }
-    .swarm-btn.manual:hover { background: #e68900; }
-    .swarm-btn.manual.active { background: #4caf50; color: #fff; animation: pulse-manual 1.5s infinite; }
-    @keyframes pulse-manual {
-      0%, 100% { box-shadow: 0 0 4px #4caf50; }
-      50% { box-shadow: 0 0 12px #00ff9d; }
-    }
-    .swarm-btn.danger   { border-color: var(--danger); color: var(--danger); }
-    .swarm-btn.danger:hover { background: rgba(255,71,87,0.1); }
-
-    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-    .btn-grid .span2 { grid-column: span 2; }
-
-    input[type="range"] { width: 100%; accent-color: var(--accent); }
-
-    .info-row {
-      font-size: 9px; color: var(--text-secondary);
-      padding: 4px 6px;
-      background: rgba(0,0,0,0.3);
-      border-radius: 3px; margin-bottom: 4px;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .info-row span { color: var(--accent); }
-
-    /* ---- Collision Warning Banner ---- */
-    #collision-banner {
-      display: none;
-      position: absolute;
-      top: 12px; left: 50%; transform: translateX(-50%);
-      background: rgba(120, 20, 20, 0.95);
-      border: 1px solid var(--danger);
-      border-radius: 6px;
-      padding: 6px 16px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #ffaaaa;
-      z-index: 200;
-      white-space: nowrap;
-      pointer-events: none;
-      animation: pulse-border 1s ease-in-out infinite;
-    }
-    @keyframes pulse-border {
-      0%, 100% { border-color: var(--danger); }
-      50%       { border-color: #ff9999; }
-    }
-  </style>
+  <meta name="theme-color" content="#f3f5f7">
+  <title>SwarmControl — Fleet Operations</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="dashboard.css">
 </head>
-
 <body>
+  <header class="app-header">
+    <a class="brand" href="#" aria-label="SwarmControl home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span class="brand-name">SWARM<span>CONTROL</span></span>
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-context">FLEET OPERATIONS</span>
+    </a>
+    <div id="status-bar" role="group" aria-label="Fleet overview">
+      <div class="sb-item" id="sb-mode"><span class="metric-label">MODE</span><span class="val" id="sb-mode-val">—</span></div>
+      <div class="sb-item" id="sb-drones"><span class="metric-label">DRONES</span><span class="val" id="sb-drones-val">0</span></div>
+      <div class="sb-item"><span class="metric-label">LEADER</span><span class="val" id="sb-leader-val">—</span></div>
+      <div class="sb-item"><span class="metric-label">FORMATION</span><span class="val" id="sb-formation-val">V-SHAPE</span></div>
+      <div class="sb-item ws-metric"><span class="metric-label">LINK</span><span class="val" id="sb-ws-val">CONNECTING…</span></div>
+    </div>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to dark theme" aria-pressed="false">Dark mode</button>
+  </header>
 
-  <!-- Top Status Bar -->
-  <div id="status-bar">
-    <div class="sb-item" id="sb-mode">
-      <span>MODE</span><span class="val" id="sb-mode-val">—</span>
-    </div>
-    <div class="sb-item" id="sb-drones">
-      <span>DRONES</span><span class="val" id="sb-drones-val">0</span>
-    </div>
-    <div class="sb-item">
-      <span>LEADER</span><span class="val" id="sb-leader-val">—</span>
-    </div>
-    <div class="sb-item">
-      <span>FORMATION</span><span class="val" id="sb-formation-val">OFF</span>
-    </div>
-    <div class="sb-item">
-      <span>WS</span><span class="val" id="sb-ws-val">CONNECTING…</span>
-    </div>
-  </div>
+  <div id="reconnect-banner" role="status">⚠ WebSocket disconnected — reconnecting…</div>
 
-  <!-- Reconnect Banner -->
-  <div id="reconnect-banner">⚠ WebSocket disconnected – reconnecting…</div>
-
-  <div id="main-layout">
-    <!-- Log Sidebar (collapsible) -->
-    <div id="sidebar">
-      <div class="sidebar-header">
-        <span class="sidebar-title">> SYSTEM LOGS <span class="blink">_</span></span>
-        <button id="sidebar-toggle" title="Toggle logs">◀</button>
+  <main id="main-layout">
+    <aside class="fleet-rail" aria-label="Fleet status">
+      <div class="rail-heading"><span class="eyebrow">FLEET</span></div>
+      <button class="fleet-toggle" type="button" onclick="toggleDropdown()" aria-expanded="true" aria-controls="drone-list">
+        <span>Aircraft status</span><span id="arrow" class="chevron" aria-hidden="true">▲</span>
+      </button>
+      <div class="stat-grid">
+        <div class="stat-item"><div class="label">ACTIVE AIRCRAFT</div><div class="value" id="active-count">0</div></div>
+        <div class="stat-item"><div class="label">AVG ALT <span>(AGL)</span></div><div class="value" id="avg-alt">0.0m</div></div>
       </div>
-      <div id="log-container">
+      <div class="fleet-list-heading"><span>Aircraft</span><span id="drone-list-count" class="eyebrow">0 in fleet</span></div>
+      <div id="drone-list" class="open" role="group" aria-label="Aircraft list"></div>
+    </aside>
+
+    <section id="main-view" aria-label="3D fleet visualization">
+      <div class="viewport-topline">
+        <div><span class="eyebrow">MISSION VIEW</span><h1>Fleet overview</h1></div>
+        <div class="viewport-actions" role="group" aria-label="3D view controls">
+          <button type="button" onclick="fitFleet()" title="Fit all aircraft in view">Fit fleet</button>
+          <button type="button" onclick="setTopView()" title="Switch to top-down view">Top view</button>
+          <button type="button" onclick="resetView()" title="Reset camera view">Reset</button>
+        </div>
+      </div>
+      <div id="canvas-container" role="img" aria-label="Interactive 3D fleet view. Use the aircraft list to select a drone and the view controls to adjust the camera."></div>
+      <div id="loading" role="status">INITIALIZING 3D ENVIRONMENT…</div>
+      <div class="view-hint">Select an aircraft in the fleet list <span>·</span> Drag to orbit <span>·</span> Scroll to zoom</div>
+      <div id="collision-banner" role="alert">⚠ COLLISION PROXIMITY ALERT</div>
+    </section>
+
+    <aside id="right-sidebar" aria-label="Mission controls">
+      <div class="controls-heading"><div><span class="eyebrow">COMMAND</span><h2>Mission controls</h2></div></div>
+      <section class="panel">
+        <button class="panel-title" type="button" onclick="togglePanel('swarm-body','swarm-arrow')" aria-controls="swarm-body" aria-expanded="true" aria-label="Toggle swarm control">
+          <span class="panel-title-icon" aria-hidden="true">✣</span><span class="panel-title-text">Swarm control</span><span class="toggle-arrow" id="swarm-arrow" aria-hidden="true">▲</span>
+        </button>
+        <div class="panel-body" id="swarm-body">
+          <div class="ctrl-group">
+            <label class="ctrl-label" for="leader-select">LEADER DRONE</label>
+            <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)"><option value="-1">AUTO (lowest sysid)</option></select>
+          </div>
+          <div class="ctrl-row ctrl-group">
+            <div><label class="ctrl-label" for="formation-type">FORMATION</label><select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)"><option value="V" selected>V-SHAPE</option><option value="line">LINE</option><option value="off">OFF</option></select></div>
+            <div><label class="ctrl-label" for="spacing-slider">SPACING <span class="unit">(m)</span></label><div class="range-value"><span id="spacing-val">10</span><span class="unit">m</span></div><input type="range" id="spacing-slider" min="3" max="50" value="10" aria-label="Formation spacing in meters" oninput="document.getElementById('spacing-val').textContent=this.value"></div>
+          </div>
+          <div class="info-row"><span class="info-label">LEADER POSITION</span><span id="leader-pos">WAITING…</span></div>
+          <div class="section-label">TARGET COORDINATES</div>
+          <div class="ctrl-row ctrl-group coordinate-row">
+            <div><label class="ctrl-label" for="cmd-lat">LATITUDE</label><input type="number" id="cmd-lat" class="ctrl-input" step="0.000001" inputmode="decimal" placeholder="0.000000"></div>
+            <div><label class="ctrl-label" for="cmd-lon">LONGITUDE</label><input type="number" id="cmd-lon" class="ctrl-input" step="0.000001" inputmode="decimal" placeholder="0.000000"></div>
+          </div>
+          <div class="ctrl-group altitude-group"><label class="ctrl-label" for="cmd-alt">ALTITUDE <span class="unit">(AGL)</span></label><div class="input-suffix"><input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1"><span>m</span></div></div>
+          <div id="command-feedback" role="status" aria-live="polite"></div>
+          <div class="section-label action-label">FLIGHT ACTIONS</div>
+          <div class="btn-grid" role="group" aria-label="Routine flight actions">
+            <button class="swarm-btn success" type="button" onclick="swarmCmd('arm')">ARM</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('takeoff')">TAKEOFF</button>
+            <button class="swarm-btn accent span2" type="button" onclick="swarmCmd('fly_to')">FLY TO TARGET <span aria-hidden="true">↗</span></button>
+            <button class="swarm-btn manual span2" type="button" id="btn-manual-mode" onclick="toggleManualMode()">MANUAL MODE (RC FOLLOW)</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('rtl')">RETURN TO LAUNCH</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('land')">LAND</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel emergency-panel" aria-label="Emergency actions">
+        <div class="emergency-heading"><span class="emergency-icon" aria-hidden="true">!</span><div><h3>Emergency action</h3><p>Immediate fleet-wide command</p></div></div>
+        <button class="swarm-btn danger" type="button" onclick="swarmCmd('disarm')" aria-label="Emergency disarm all drones">EMERGENCY DISARM ALL</button>
+      </section>
+
+      <section class="panel tracker-panel">
+        <button class="panel-title" type="button" onclick="togglePanel('tracker-body','tracker-arrow')" aria-controls="tracker-body" aria-expanded="false" aria-label="Toggle drone tracker">
+          <span class="panel-title-icon tracker-icon" aria-hidden="true">◎</span><span class="panel-title-text">Drone tracker</span><span class="toggle-arrow" id="tracker-arrow" aria-hidden="true">▼</span>
+        </button>
+        <div class="panel-body collapsed" id="tracker-body">
+          <div id="tracker-view"><div id="tracker-label">NO TARGET</div></div>
+          <p class="tracker-help">Select an aircraft to follow its position.</p>
+        </div>
+      </section>
+    </aside>
+
+    <aside id="sidebar" aria-label="System event log">
+      <div class="sidebar-header"><span class="sidebar-title"><span class="log-mark" aria-hidden="true">≡</span> EVENT LOG</span><button id="sidebar-toggle" type="button" title="Toggle event log" aria-label="Toggle system event log" aria-expanded="true">⌄</button></div>
+      <div id="log-container" aria-live="polite" aria-relevant="additions">
         <div class="log-entry sys">[SYSTEM] Interface ready…</div>
         <div class="log-entry sys">[SYSTEM] Connecting to WebSocket…</div>
       </div>
-    </div>
-
-    <!-- 3D Scene -->
-    <div id="main-view">
-      <div id="canvas-container"></div>
-      <div id="loading">INITIALIZING 3D ENVIRONMENT…</div>
-
-      <!-- Left overlay: Swarm status + drone list -->
-      <div class="overlay">
-        <h2 onclick="toggleDropdown()">Swarm Status <span id="arrow">▼</span></h2>
-        <div class="stat-grid">
-          <div class="stat-item">
-            <div class="label">ACTIVE DRONES</div>
-            <div class="value" id="active-count">0</div>
-          </div>
-          <div class="stat-item">
-            <div class="label">AVG ALT (AGL)</div>
-            <div class="value" id="avg-alt">0.0m</div>
-          </div>
-        </div>
-        <div id="drone-list"></div>
-      </div>
-
-      <!-- Collision warning banner (sits inside #main-view) -->
-      <div id="collision-banner">⚠ COLLISION PROXIMITY ALERT</div>
-
-      <!-- Right sidebar: Swarm Control first, then collapsible Tracker -->
-      <div id="right-sidebar">
-
-        <!-- Swarm Control -->
-        <div class="panel">
-          <div class="panel-title" onclick="togglePanel('swarm-body','swarm-arrow')">
-            Swarm Control <span class="toggle-arrow" id="swarm-arrow">▲</span>
-          </div>
-          <div class="panel-body" id="swarm-body">
-
-            <!-- Leader selector -->
-            <div class="ctrl-group">
-              <label class="ctrl-label">LEADER DRONE</label>
-              <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)">
-                <option value="-1">AUTO (lowest sysid)</option>
-              </select>
-            </div>
-
-            <!-- Formation type + spacing -->
-            <div class="ctrl-row ctrl-group">
-              <div>
-                <label class="ctrl-label">FORMATION</label>
-                <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
-                  <option value="V" selected>V-SHAPE</option>
-                  <option value="line">LINE</option>
-                  <option value="off">OFF</option>
-                </select>
-              </div>
-              <div>
-                <label class="ctrl-label">SPACING (m) <span id="spacing-val">10</span></label>
-                <input type="range" id="spacing-slider" min="3" max="50" value="10"
-                       oninput="document.getElementById('spacing-val').textContent=this.value">
-              </div>
-            </div>
-
-            <!-- Leader position display -->
-            <div class="info-row">
-              LEADER POS: <span id="leader-pos">WAITING…</span>
-            </div>
-
-            <!-- Target coordinates -->
-            <div class="ctrl-row ctrl-group">
-              <div>
-                <label class="ctrl-label">LAT</label>
-                <input type="number" id="cmd-lat" class="ctrl-input" step="0.000001">
-              </div>
-              <div>
-                <label class="ctrl-label">LON</label>
-                <input type="number" id="cmd-lon" class="ctrl-input" step="0.000001">
-              </div>
-            </div>
-            <div class="ctrl-group">
-              <label class="ctrl-label">ALT AGL (m)</label>
-              <input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1">
-            </div>
-
-            <!-- Command buttons -->
-            <div class="btn-grid">
-              <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
-              <button class="swarm-btn" onclick="swarmCmd('takeoff')" style="border-color:var(--accent);color:var(--accent)">TAKEOFF</button>
-              <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
-              <button class="swarm-btn manual span2" id="btn-manual-mode" onclick="toggleManualMode()">MANUAL MODE (RC FOLLOW)</button>
-              <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
-              <button class="swarm-btn" onclick="swarmCmd('land')" style="border-color:var(--accent);color:var(--accent)">LAND</button>
-              <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')">DISARM (EMERGENCY)</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Drone Tracker (collapsible, collapsed by default) -->
-        <div class="panel">
-          <div class="panel-title" onclick="togglePanel('tracker-body','tracker-arrow')">
-            Drone Tracker <span class="toggle-arrow" id="tracker-arrow">▼</span>
-          </div>
-          <div class="panel-body collapsed" id="tracker-body">
-            <div id="tracker-view">
-              <div id="tracker-label">NO TARGET</div>
-            </div>
-            <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">Click a drone to track.</div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </div>
+    </aside>
+  </main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-
-  <script>
-    // ======================== Configuration Constants ========================
-    const WS_URL                   = 'ws://localhost:8001';
-    const WS_INITIAL_RETRY_DELAY   = 1000;   // ms – first reconnect delay
-    const WS_MAX_DELAY             = 30000;  // ms – cap on exponential backoff
-    const MAX_LOG_ENTRIES          = 150;    // keep last N log lines in sidebar
-    const DRONE_LIST_UPDATE_MS     = 200;    // throttle drone-list DOM updates (ms)
-    // 3D scene distance (metres) that triggers the collision warning
-    const COLLISION_WARN_M         = 1.5;
-    // Three.js hex colours for drone body material
-    const DRONE_NORMAL_COLOR       = 0x00d4ff;
-    const DRONE_COLLISION_COLOR    = 0xff2222;
-    const DRONE_NORMAL_EMISSIVE    = 0x0044aa;
-    const DRONE_COLLISION_EMISSIVE = 0x550000;
-
-    // ======================== Panel Toggle ========================
-    function togglePanel(bodyId, arrowId) {
-      const body = document.getElementById(bodyId);
-      const arrow = document.getElementById(arrowId);
-      const collapsed = body.classList.toggle('collapsed');
-      arrow.textContent = collapsed ? '▼' : '▲';
-    }
-
-    // ======================== Sidebar Toggle ========================
-    function toggleSidebar(evt) {
-      if (evt) evt.stopPropagation();
-      const sidebar = document.getElementById('sidebar');
-      sidebar.classList.toggle('collapsed');
-    }
-
-    // Bind sidebar toggle to any click inside the sidebar
-    const _sidebarEl = document.getElementById('sidebar');
-    if (_sidebarEl) {
-      _sidebarEl.addEventListener('click', toggleSidebar);
-    }
-
-    // ======================== WebSocket with Exponential Backoff ========================
-    let ws = null;
-    let wsRetryDelay = WS_INITIAL_RETRY_DELAY;
-    let wsConnected = false;
-
-    function connectWS() {
-      ws = new WebSocket(WS_URL);
-
-      ws.onopen = () => {
-        wsConnected = true;
-        wsRetryDelay = WS_INITIAL_RETRY_DELAY;
-        document.getElementById('sb-ws-val').textContent = 'CONNECTED';
-        document.getElementById('reconnect-banner').style.display = 'none';
-        document.getElementById('loading').style.display = 'none';
-        log('WebSocket connected.', 'sys');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'log') {
-            log(msg.content, 'info');
-          } else if (msg.type === 'telemetry') {
-            pendingTelemetry = Object.assign(pendingTelemetry || {}, msg.data);
-          } else if (msg.type === 'status') {
-            applyStatus(msg.data);
-          }
-        } catch (e) {
-          console.error('[WS] Parse error:', e);
-        }
-      };
-
-      ws.onclose = () => {
-        wsConnected = false;
-        document.getElementById('sb-ws-val').textContent = 'DISCONNECTED';
-        document.getElementById('reconnect-banner').style.display = 'block';
-        log(`WebSocket closed. Retrying in ${(wsRetryDelay/1000).toFixed(1)}s…`, 'error');
-        setTimeout(() => {
-          wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_DELAY);
-          connectWS();
-        }, wsRetryDelay);
-      };
-
-      ws.onerror = () => {
-        document.getElementById('sb-ws-val').textContent = 'ERROR';
-        ws.close();
-      };
-    }
-
-    connectWS();
-
-    // ======================== Telemetry Batching ========================
-    // pendingTelemetry accumulates updates between animation frames
-    let pendingTelemetry = null;
-
-    // ======================== Log ========================
-    const logContainer = document.getElementById('log-container');
-    function log(text, type = 'info') {
-      const div = document.createElement('div');
-      div.className = `log-entry ${type}`;
-      div.textContent = `> ${text}`;
-      logContainer.appendChild(div);
-      if (logContainer.children.length > MAX_LOG_ENTRIES) logContainer.removeChild(logContainer.firstChild);
-      logContainer.scrollTop = logContainer.scrollHeight;
-    }
-
-    // ======================== Status Sync ========================
-    let currentLeaderSysid = 1;  // Hardcoded default leader is Drone 1
-
-    function applyStatus(data) {
-      if (data.mode !== undefined) {
-        document.getElementById('sb-mode-val').textContent = data.mode;
-      }
-      if (data.leader !== undefined) {
-        currentLeaderSysid = parseInt(data.leader);
-        const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
-        document.getElementById('sb-leader-val').textContent = label;
-        syncLeaderSelect();
-      }
-      if (data.drone_count !== undefined) {
-        document.getElementById('sb-drones-val').textContent = data.drone_count;
-      }
-      if (data.manual_mode !== undefined) {
-        isManualModeActive = Boolean(data.manual_mode);
-        updateManualModeUI();
-      }
-    }
-
-    let isManualModeActive = false;
-
-    function toggleManualMode() {
-      const fState = getFormationState();
-      const payload = {
-        type: 'swarm_command',
-        cmd: 'manual_mode',
-        ...fState,
-        alt: parseFloat(document.getElementById('cmd-alt').value) || 10,
-      };
-      wsSend(payload);
-    }
-
-    function updateManualModeUI() {
-      const btn = document.getElementById('btn-manual-mode');
-      if (!btn) return;
-      if (isManualModeActive) {
-        btn.classList.add('active');
-        btn.textContent = 'MANUAL MODE: ACTIVE (CLICK TO STOP)';
-      } else {
-        btn.classList.remove('active');
-        btn.textContent = 'MANUAL MODE (RC FOLLOW)';
-      }
-    }
-
-    // ======================== Leader Control ========================
-    function onLeaderChange(val) {
-      currentLeaderSysid = parseInt(val);
-      const label = currentLeaderSysid === -1 ? 'AUTO' : `#${currentLeaderSysid}`;
-      document.getElementById('sb-leader-val').textContent = label;
-      wsSend({ type: 'set_leader', sysid: currentLeaderSysid });
-      log(`Leader set to ${label}`, 'sys');
-    }
-
-    function syncLeaderSelect() {
-      const sel = document.getElementById('leader-select');
-      sel.value = String(currentLeaderSysid);
-    }
-
-    function updateLeaderSelect() {
-      const sel = document.getElementById('leader-select');
-      const existing = new Set([...sel.options].map(o => o.value));
-      const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
-      sortedIds.forEach(id => {
-        if (!existing.has(id)) {
-          const opt = document.createElement('option');
-          opt.value = id;
-          opt.textContent = `DRONE #${id}`;
-          sel.appendChild(opt);
-        }
-      });
-      syncLeaderSelect();
-
-      // Ensure formation indicator reflects the default V-shape on load
-      const fType = document.getElementById('formation-type').value;
-      document.getElementById('sb-formation-val').textContent = fType !== 'off' ? fType : 'OFF';
-    }
-
-    // ======================== Formation Control ========================
-    function onFormationTypeChange(val) {
-      const isOn = val !== 'off';
-      document.getElementById('sb-formation-val').textContent = isOn ? val : 'OFF';
-    }
-
-    function getFormationState() {
-      const fType = document.getElementById('formation-type').value;
-      return {
-        formation: fType !== 'off',
-        pattern: fType === 'off' ? 'V' : fType,
-        spacing_m: parseFloat(document.getElementById('spacing-slider').value),
-      };
-    }
-
-    // ======================== Swarm Commands ========================
-    function wsSend(payload) {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
-      } else {
-        log('WebSocket not connected – command dropped.', 'error');
-      }
-    }
-
-    function swarmCmd(cmd) {
-      const fState = getFormationState();
-      const payload = {
-        type: 'swarm_command',
-        cmd,
-        ...fState,
-        lat: parseFloat(document.getElementById('cmd-lat').value) || 0,
-        lon: parseFloat(document.getElementById('cmd-lon').value) || 0,
-        alt: parseFloat(document.getElementById('cmd-alt').value) || 5,
-      };
-      wsSend(payload);
-      log(`Sent: ${cmd} | formation=${payload.formation} pattern=${payload.pattern} spacing=${payload.spacing_m}m`, 'sys');
-    }
-
-    // ======================== 3D Scene ========================
-    const drones = {};
-    let scene, camera, renderer, controls;
-    let trackerRenderer, trackerCamera;
-    let selectedDroneId = null;
-    let isDropdownOpen = false;
-
-    function toggleDropdown() {
-      isDropdownOpen = !isDropdownOpen;
-      document.getElementById('drone-list').classList.toggle('open', isDropdownOpen);
-      document.getElementById('arrow').textContent = isDropdownOpen ? '▲' : '▼';
-    }
-
-    window.selectDrone = function (id) {
-      selectedDroneId = id;
-      document.getElementById('tracker-label').textContent = `TRACKING: #${id}`;
-      renderDroneList();
-      if (drones[id] && drones[id].telemetry) {
-        document.getElementById('cmd-lat').value = drones[id].telemetry.lat.toFixed(6);
-        document.getElementById('cmd-lon').value = drones[id].telemetry.lon.toFixed(6);
-      }
-    };
-
-    function init3D() {
-      const container = document.getElementById('canvas-container');
-
-      scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x050505);
-      scene.fog = new THREE.Fog(0x050505, 100, 5000);
-
-      camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 50000);
-      camera.position.set(0, 50, 80);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(container.clientWidth, container.clientHeight);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      container.appendChild(renderer.domElement);
-
-      // Tracker
-      const trackerEl = document.getElementById('tracker-view');
-      trackerRenderer = new THREE.WebGLRenderer({ antialias: true });
-      trackerRenderer.setSize(trackerEl.clientWidth, trackerEl.clientHeight);
-      trackerEl.appendChild(trackerRenderer.domElement);
-      trackerCamera = new THREE.PerspectiveCamera(50, trackerEl.clientWidth / trackerEl.clientHeight, 0.1, 2000);
-
-      controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
-      controls.maxDistance = 5000;
-
-      scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-      const dir = new THREE.DirectionalLight(0xffffff, 1);
-      dir.position.set(50, 100, 50);
-      scene.add(dir);
-
-      scene.add(new THREE.GridHelper(1000, 100, 0x222222, 0x111111));
-
-      const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(200000, 200000),
-        new THREE.MeshBasicMaterial({ color: 0x060608, side: THREE.DoubleSide })
-      );
-      ground.rotation.x = -Math.PI / 2;
-      ground.position.y = -0.5;
-      scene.add(ground);
-
-      function animate() {
-        requestAnimationFrame(animate);
-        controls.update();
-
-        // ---- Flush pending telemetry ----
-        if (pendingTelemetry) {
-          updateSwarm(pendingTelemetry);
-          pendingTelemetry = null;
-        }
-
-        // Prop spin
-        Object.values(drones).forEach(d => { if (d.props) d.props.rotation.y += 0.4; });
-
-        // ---- Collision proximity check (runs every frame, cheap pairwise) ----
-        checkCollisionProximity();
-
-        renderer.render(scene, camera);
-
-        // Tracker
-        if (selectedDroneId && drones[selectedDroneId]) {
-          const pos = drones[selectedDroneId].mesh.position.clone();
-          trackerCamera.position.copy(pos).add(new THREE.Vector3(8, 8, 8));
-          trackerCamera.lookAt(pos);
-          // Only render tracker if its panel is expanded
-          if (!document.getElementById('tracker-body').classList.contains('collapsed')) {
-            trackerRenderer.render(scene, trackerCamera);
-          }
-        }
-      }
-      animate();
-
-      window.addEventListener('resize', () => {
-        camera.aspect = container.clientWidth / container.clientHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(container.clientWidth, container.clientHeight);
-      });
-    }
-
-    // ======================== Collision Proximity Check ========================
-    const collisionBanner = document.getElementById('collision-banner');
-    let collisionLogThrottle = 0;
-
-    function checkCollisionProximity() {
-      const ids = Object.keys(drones);
-      if (ids.length < 2) {
-        collisionBanner.style.display = 'none';
-        return;
-      }
-
-      // First pass: determine which drones are in violation across ALL pairs
-      const violators = new Set();
-
-      for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          const pi = drones[ids[i]].mesh.position;
-          const pj = drones[ids[j]].mesh.position;
-          const ti = drones[ids[i]].telemetry;
-          const tj = drones[ids[j]].telemetry;
-
-          // Don't trigger false collision alarms while drones are still sitting on the ground (< 1m alt)
-          const isAirborne = (ti && ti.alt > 1.0) || (tj && tj.alt > 1.0);
-          if (!isAirborne) continue;
-
-          // distanceTo gives true 3D Euclidean distance (Y = altitude in scene metres)
-          const dist = pi.distanceTo(pj);
-
-          if (dist < COLLISION_WARN_M) {
-            violators.add(ids[i]);
-            violators.add(ids[j]);
-
-            // Throttled log (at most once every 5 s)
-            const now = Date.now();
-            if (now - collisionLogThrottle > 5000) {
-              collisionLogThrottle = now;
-              log(`⚠ COLLISION: Drone #${ids[i]} & #${ids[j]} are ${dist.toFixed(1)}m apart!`, 'error');
-            }
-          }
-        }
-      }
-
-      // Second pass: apply tints based on accumulated violation set
-      ids.forEach(id => {
-        setDroneTint(id, violators.has(id) ? DRONE_COLLISION_COLOR : DRONE_NORMAL_COLOR);
-      });
-
-      collisionBanner.style.display = violators.size > 0 ? 'block' : 'none';
-    }
-
-    init3D();
-
-    // Cache body materials per drone for fast tinting
-    const _droneTintCache = {};
-    function setDroneTint(sysid, color) {
-      if (!drones[sysid]) return;
-      if (!_droneTintCache[sysid]) {
-        // Find the body mesh (first child that is a Mesh with MeshPhongMaterial)
-        drones[sysid].mesh.children.forEach(child => {
-          if (child.isMesh && child.material && child.material.isMeshPhongMaterial) {
-            _droneTintCache[sysid] = child.material;
-          }
-        });
-      }
-      const mat = _droneTintCache[sysid];
-      if (mat && mat.color.getHex() !== color) {
-        mat.color.setHex(color);
-        mat.emissive.setHex(
-          color === DRONE_COLLISION_COLOR ? DRONE_COLLISION_EMISSIVE : DRONE_NORMAL_EMISSIVE
-        );
-      }
-    }
-
-    // ======================== Drone 3D Objects ========================
-    function createDrone(sysid) {
-      const group = new THREE.Group();
-
-      const mat = new THREE.MeshPhongMaterial({
-        color: DRONE_NORMAL_COLOR, emissive: DRONE_NORMAL_EMISSIVE, emissiveIntensity: 0.5
-      });
-      group.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 0.5), mat));
-
-      const armMat = new THREE.MeshBasicMaterial({ color: 0x555555 });
-      const armGeom = new THREE.BoxGeometry(1.2, 0.05, 0.1);
-      const arm1 = new THREE.Mesh(armGeom, armMat); arm1.rotation.y = Math.PI / 4;
-      const arm2 = new THREE.Mesh(armGeom, armMat); arm2.rotation.y = -Math.PI / 4;
-      group.add(arm1); group.add(arm2);
-
-      const propGroup = new THREE.Group();
-      const propGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.02, 8);
-      const propMat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.8 });
-      [{ x: 0.42, z: 0.42 }, { x: -0.42, z: -0.42 }, { x: 0.42, z: -0.42 }, { x: -0.42, z: 0.42 }].forEach(p => {
-        const prop = new THREE.Mesh(propGeom, propMat);
-        prop.position.set(p.x, 0.1, p.z);
-        propGroup.add(prop);
-      });
-      group.add(propGroup);
-
-      // Label
-      const lCanvas = document.createElement('canvas');
-      lCanvas.width = 64; lCanvas.height = 32;
-      const ctx = lCanvas.getContext('2d');
-      ctx.fillStyle = '#00d4ff';
-      ctx.font = 'bold 20px monospace';
-      ctx.fillText(`#${sysid}`, 4, 24);
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(lCanvas) })
-      );
-      sprite.position.y = 1.2;
-      sprite.scale.set(2, 1, 1);
-      group.add(sprite);
-
-      group.position.set(0, 0, 0);
-      scene.add(group);
-      return { mesh: group, props: propGroup };
-    }
-
-    // ======================== Telemetry Processing ========================
-    window.homeRef = null;
-    let lastListUpdate = 0;
-
-    function updateSwarm(data) {
-      // Set home reference from first valid fix
-      if (!window.homeRef) {
-        const firstId = Object.keys(data)[0];
-        if (firstId && Math.abs(data[firstId].lat) > 0.1) {
-          window.homeRef = { lat: data[firstId].lat, lon: data[firstId].lon };
-          log(`Home ref: ${window.homeRef.lat.toFixed(6)}, ${window.homeRef.lon.toFixed(6)}`, 'sys');
-        }
-      }
-
-      let newDroneAdded = false;
-
-      for (const [sysid, t] of Object.entries(data)) {
-        if (!drones[sysid]) {
-          drones[sysid] = createDrone(sysid);
-          log(`New drone detected: #${sysid}`, 'sys');
-          if (!selectedDroneId) selectDrone(sysid);
-          newDroneAdded = true;
-        }
-
-        drones[sysid].telemetry = t;
-
-        if (window.homeRef) {
-          const latDiff = t.lat - window.homeRef.lat;
-          const lonDiff = t.lon - window.homeRef.lon;
-          const cosLat = Math.cos(window.homeRef.lat * Math.PI / 180);
-
-          // Position in 3D scene (X = East, Z = South, Y = Altitude AGL)
-          const x = lonDiff * 111320 * cosLat;
-          const z = -latDiff * 110574;
-          const y = (t.alt !== undefined) ? t.alt : 0;
-
-          drones[sysid].mesh.position.set(x, Math.max(0, y), z);
-          drones[sysid].mesh.rotation.x = t.pitch * (Math.PI / 180);
-          drones[sysid].mesh.rotation.z = -t.roll * (Math.PI / 180);
-          drones[sysid].mesh.rotation.y = -t.yaw * (Math.PI / 180);
-        }
-      }
-
-      // Update stats
-      const allDrones = Object.values(drones);
-      const activeCount = allDrones.length;
-      document.getElementById('active-count').textContent = activeCount;
-      document.getElementById('sb-drones-val').textContent = activeCount;
-
-      let totalAlt = 0;
-      allDrones.forEach(d => { if (d.telemetry) totalAlt += d.telemetry.alt; });
-      document.getElementById('avg-alt').textContent =
-        activeCount > 0 ? (totalAlt / activeCount).toFixed(1) + 'm' : '0.0m';
-
-      // Leader position display
-      const leaderSysid = currentLeaderSysid === -1
-        ? (Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b))[0] || null)
-        : String(currentLeaderSysid);
-
-      const leaderPosEl = document.getElementById('leader-pos');
-      if (leaderSysid && drones[leaderSysid] && drones[leaderSysid].telemetry) {
-        const lt = drones[leaderSysid].telemetry;
-        leaderPosEl.textContent =
-          `L:${lt.lat.toFixed(5)} LN:${lt.lon.toFixed(5)} A:${lt.alt.toFixed(1)}m`;
-      } else {
-        leaderPosEl.textContent = 'WAITING…';
-      }
-
-      if (newDroneAdded) updateLeaderSelect();
-
-      if (isDropdownOpen) {
-        const now = Date.now();
-        if (now - lastListUpdate > DRONE_LIST_UPDATE_MS) {
-          renderDroneList();
-          lastListUpdate = now;
-        }
-      }
-    }
-
-    function renderDroneList() {
-      const sortedIds = Object.keys(drones).sort((a, b) => parseInt(a) - parseInt(b));
-      const leaderSysid = currentLeaderSysid === -1
-        ? (sortedIds[0] || null)
-        : String(currentLeaderSysid);
-
-      let html = '';
-      sortedIds.forEach(id => {
-        const t = drones[id].telemetry;
-        const selected = id === selectedDroneId ? 'selected' : '';
-        const isLeader = id === leaderSysid ? 'leader-row' : '';
-        const leaderBadge = id === leaderSysid ? ' ★LEADER' : '';
-        if (t) {
-          html += `
-            <div class="drone-row ${selected} ${isLeader}"
-                 onclick="event.stopPropagation();selectDrone('${id}')">
-              <div class="header">DRONE #${id}${leaderBadge}</div>
-              <div class="details">
-                <span>Lat: ${t.lat.toFixed(5)}</span>
-                <span>Lon: ${t.lon.toFixed(5)}</span>
-                <span>AGL: ${t.alt.toFixed(1)}m</span>
-                <span>MSL: ${(t.alt_msl||0).toFixed(1)}m</span>
-                <span>HSpd: ${t.h_speed.toFixed(1)}</span>
-                <span>VSpd: ${t.v_speed.toFixed(1)}</span>
-              </div>
-            </div>`;
-        }
-      });
-      document.getElementById('drone-list').innerHTML = html;
-    }
-  </script>
+  <script src="dashboard.js"></script>
 </body>
 </html>
-
-
-
-

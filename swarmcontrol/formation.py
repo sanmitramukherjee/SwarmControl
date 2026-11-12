@@ -48,6 +48,33 @@ def check_formation_separation(positions_with_alt, min_sep_m=COLLISION_WARN_M):
     return warnings
 
 
+def segment_clear_of_point(start, end, point, min_sep_m=COLLISION_WARN_M):
+    """Conservative closest 3-D distance from a planned straight leg to a hold point.
+
+    Altitudes are relative to each vehicle's home; the caller must ensure those
+    references are comparable before using this as a physical separation claim.
+    """
+    lat0 = start[0]
+    metres_lat, metres_lon = _meters_to_deg(lat0)
+
+    def xyz(position):
+        return (
+            (position[1] - start[1]) * metres_lon,
+            (position[0] - start[0]) * metres_lat,
+            position[2] - start[2],
+        )
+
+    b, p = xyz(end), xyz(point)
+    length2 = sum(v * v for v in b)
+    fraction = (
+        max(0.0, min(1.0, sum(b[i] * p[i] for i in range(3)) / length2))
+        if length2
+        else 0.0
+    )
+    distance2 = sum((p[i] - fraction * b[i]) ** 2 for i in range(3))
+    return distance2 >= min_sep_m * min_sep_m
+
+
 def calculate_formation_offsets(
     leader_lat,
     leader_lon,
