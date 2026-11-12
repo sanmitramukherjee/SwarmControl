@@ -1,177 +1,123 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SwarmControl – Drone Swarm Command Center</title>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
+  <meta name="theme-color" content="#f3f5f7">
+  <title>SwarmControl — Fleet Operations</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="dashboard.css">
 </head>
-
 <body>
-
-  <!-- Top Status Bar -->
-  <header id="status-bar" aria-label="Fleet overview">
-    <div class="sb-item" id="sb-mode">
-      <span>MODE</span><span class="val" id="sb-mode-val">—</span>
-    </div>
-    <div class="sb-item" id="sb-drones">
-      <span>DRONES</span><span class="val" id="sb-drones-val">0</span>
-    </div>
-    <div class="sb-item">
-      <span>LEADER</span><span class="val" id="sb-leader-val">—</span>
-    </div>
-    <div class="sb-item">
-      <span>FORMATION</span><span class="val" id="sb-formation-val">OFF</span>
-    </div>
-    <div class="sb-item">
-      <span>WS</span><span class="val" id="sb-ws-val">CONNECTING…</span>
+  <header class="app-header">
+    <a class="brand" href="#" aria-label="SwarmControl home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span class="brand-name">SWARM<span>CONTROL</span></span>
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-context">FLEET OPERATIONS</span>
+    </a>
+    <div id="status-bar" aria-label="Fleet overview">
+      <div class="sb-item" id="sb-mode"><span class="metric-label">MODE</span><span class="val" id="sb-mode-val">—</span></div>
+      <div class="sb-item" id="sb-drones"><span class="metric-label">DRONES</span><span class="val" id="sb-drones-val">0</span></div>
+      <div class="sb-item"><span class="metric-label">LEADER</span><span class="val" id="sb-leader-val">—</span></div>
+      <div class="sb-item"><span class="metric-label">FORMATION</span><span class="val" id="sb-formation-val">V-SHAPE</span></div>
+      <div class="sb-item ws-metric"><span class="metric-label">LINK</span><span class="val" id="sb-ws-val">CONNECTING…</span></div>
     </div>
   </header>
 
-  <!-- Reconnect Banner -->
-  <div id="reconnect-banner">⚠ WebSocket disconnected – reconnecting…</div>
+  <div id="reconnect-banner" role="status">⚠ WebSocket disconnected — reconnecting…</div>
 
-  <div id="main-layout">
-    <!-- Log Sidebar (collapsible) -->
-    <aside id="sidebar" aria-label="System log">
-      <div class="sidebar-header">
-        <span class="sidebar-title">> SYSTEM LOGS <span class="blink">_</span></span>
-        <button id="sidebar-toggle" title="Toggle logs" aria-label="Toggle system log">◀</button>
+  <main id="main-layout">
+    <aside class="fleet-rail" aria-label="Fleet status">
+      <div class="rail-heading"><span class="eyebrow">FLEET</span></div>
+      <button class="fleet-toggle" type="button" onclick="toggleDropdown()" aria-expanded="true" aria-controls="drone-list">
+        <span>Aircraft status</span><span id="arrow" class="chevron">▼</span>
+      </button>
+      <div class="stat-grid">
+        <div class="stat-item"><div class="label">ACTIVE AIRCRAFT</div><div class="value" id="active-count">0</div></div>
+        <div class="stat-item"><div class="label">AVG ALT <span>(AGL)</span></div><div class="value" id="avg-alt">0.0m</div></div>
       </div>
-      <div id="log-container">
+      <div class="fleet-list-heading"><span>Aircraft</span><span class="eyebrow">SELECT TO INSPECT</span></div>
+      <div id="drone-list" class="open" aria-label="Aircraft list"></div>
+    </aside>
+
+    <section id="main-view" aria-label="3D fleet visualization">
+      <div class="viewport-topline">
+        <div><span class="eyebrow">MISSION VIEW</span><h1>Fleet overview</h1></div>
+        <div class="viewport-actions" aria-label="Viewport controls">
+          <button type="button" onclick="fitFleet()" title="Fit all aircraft in view">Fit fleet</button>
+          <button type="button" onclick="setTopView()" title="Switch to top-down view">Top view</button>
+          <button type="button" onclick="resetView()" title="Reset camera view">Reset</button>
+        </div>
+      </div>
+      <div id="canvas-container" aria-label="Interactive 3D aircraft view"></div>
+      <div id="loading" role="status">INITIALIZING 3D ENVIRONMENT…</div>
+      <div class="view-hint">Select an aircraft in the fleet list <span>·</span> Drag to orbit <span>·</span> Scroll to zoom</div>
+      <div id="collision-banner" role="alert">⚠ COLLISION PROXIMITY ALERT</div>
+    </section>
+
+    <aside id="right-sidebar" aria-label="Mission controls">
+      <div class="controls-heading"><div><span class="eyebrow">COMMAND</span><h2>Mission controls</h2></div></div>
+      <section class="panel">
+        <button class="panel-title" type="button" onclick="togglePanel('swarm-body','swarm-arrow')" aria-controls="swarm-body" aria-label="Toggle swarm control">
+          <span class="panel-title-icon" aria-hidden="true">✣</span><span class="panel-title-text">Swarm control</span><span class="toggle-arrow" id="swarm-arrow">▲</span>
+        </button>
+        <div class="panel-body" id="swarm-body">
+          <div class="ctrl-group">
+            <label class="ctrl-label" for="leader-select">LEADER DRONE</label>
+            <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)"><option value="-1">AUTO (lowest sysid)</option></select>
+          </div>
+          <div class="ctrl-row ctrl-group">
+            <div><label class="ctrl-label" for="formation-type">FORMATION</label><select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)"><option value="V" selected>V-SHAPE</option><option value="line">LINE</option><option value="off">OFF</option></select></div>
+            <div><label class="ctrl-label" for="spacing-slider">SPACING <span class="unit">(m)</span></label><div class="range-value"><span id="spacing-val">10</span><span class="unit">m</span></div><input type="range" id="spacing-slider" min="3" max="50" value="10" aria-label="Formation spacing in meters" oninput="document.getElementById('spacing-val').textContent=this.value"></div>
+          </div>
+          <div class="info-row"><span class="info-label">LEADER POSITION</span><span id="leader-pos">WAITING…</span></div>
+          <div class="section-label">TARGET COORDINATES</div>
+          <div class="ctrl-row ctrl-group coordinate-row">
+            <div><label class="ctrl-label" for="cmd-lat">LATITUDE</label><input type="number" id="cmd-lat" class="ctrl-input" step="0.000001" inputmode="decimal" placeholder="0.000000"></div>
+            <div><label class="ctrl-label" for="cmd-lon">LONGITUDE</label><input type="number" id="cmd-lon" class="ctrl-input" step="0.000001" inputmode="decimal" placeholder="0.000000"></div>
+          </div>
+          <div class="ctrl-group altitude-group"><label class="ctrl-label" for="cmd-alt">ALTITUDE <span class="unit">(AGL)</span></label><div class="input-suffix"><input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1"><span>m</span></div></div>
+          <div id="command-feedback" role="status" aria-live="polite"></div>
+          <div class="section-label action-label">FLIGHT ACTIONS</div>
+          <div class="btn-grid" aria-label="Routine flight actions">
+            <button class="swarm-btn success" type="button" onclick="swarmCmd('arm')">ARM</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('takeoff')">TAKEOFF</button>
+            <button class="swarm-btn accent span2" type="button" onclick="swarmCmd('fly_to')">FLY TO TARGET <span aria-hidden="true">↗</span></button>
+            <button class="swarm-btn manual span2" type="button" id="btn-manual-mode" onclick="toggleManualMode()">MANUAL MODE (RC FOLLOW)</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('rtl')">RETURN TO LAUNCH</button>
+            <button class="swarm-btn" type="button" onclick="swarmCmd('land')">LAND</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel emergency-panel" aria-label="Emergency actions">
+        <div class="emergency-heading"><span class="emergency-icon" aria-hidden="true">!</span><div><h3>Emergency action</h3><p>Immediate fleet-wide command</p></div></div>
+        <button class="swarm-btn danger" type="button" onclick="swarmCmd('disarm')" aria-label="Emergency disarm all drones">EMERGENCY DISARM ALL</button>
+      </section>
+
+      <section class="panel tracker-panel">
+        <button class="panel-title" type="button" onclick="togglePanel('tracker-body','tracker-arrow')" aria-controls="tracker-body" aria-label="Toggle drone tracker">
+          <span class="panel-title-icon tracker-icon" aria-hidden="true">◎</span><span class="panel-title-text">Drone tracker</span><span class="toggle-arrow" id="tracker-arrow">▼</span>
+        </button>
+        <div class="panel-body collapsed" id="tracker-body">
+          <div id="tracker-view"><div id="tracker-label">NO TARGET</div></div>
+          <p class="tracker-help">Select an aircraft to follow its position.</p>
+        </div>
+      </section>
+    </aside>
+
+    <aside id="sidebar" aria-label="System event log">
+      <div class="sidebar-header"><span class="sidebar-title"><span class="log-mark" aria-hidden="true">≡</span> EVENT LOG</span><button id="sidebar-toggle" type="button" title="Toggle event log" aria-label="Toggle system event log" aria-expanded="true">⌄</button></div>
+      <div id="log-container" aria-live="polite" aria-relevant="additions">
         <div class="log-entry sys">[SYSTEM] Interface ready…</div>
         <div class="log-entry sys">[SYSTEM] Connecting to WebSocket…</div>
       </div>
     </aside>
-
-    <!-- 3D Scene -->
-    <div id="main-view">
-      <div id="canvas-container"></div>
-      <div id="loading">INITIALIZING 3D ENVIRONMENT…</div>
-
-      <!-- Left overlay: Swarm status + drone list -->
-      <section class="overlay" aria-label="Fleet status">
-        <h2><button type="button" onclick="toggleDropdown()" aria-expanded="false" aria-controls="drone-list">Fleet status <span id="arrow">▼</span></button></h2>
-        <div class="stat-grid">
-          <div class="stat-item">
-            <div class="label">ACTIVE DRONES</div>
-            <div class="value" id="active-count">0</div>
-          </div>
-          <div class="stat-item">
-            <div class="label">AVG ALT (AGL)</div>
-            <div class="value" id="avg-alt">0.0m</div>
-          </div>
-        </div>
-        <div id="drone-list"></div>
-      </section>
-      <div class="view-hint">Select an aircraft to inspect telemetry · Drag to orbit · Scroll to zoom</div>
-
-      <!-- Collision warning banner (sits inside #main-view) -->
-      <div id="collision-banner">⚠ COLLISION PROXIMITY ALERT</div>
-
-      <!-- Right sidebar: Swarm Control first, then collapsible Tracker -->
-      <div id="right-sidebar">
-
-        <!-- Swarm Control -->
-        <section class="panel">
-          <div class="panel-title" onclick="togglePanel('swarm-body','swarm-arrow')">
-            Swarm Control <span class="toggle-arrow" id="swarm-arrow">▲</span>
-          </div>
-          <div class="panel-body" id="swarm-body">
-
-            <!-- Leader selector -->
-            <div class="ctrl-group">
-              <label class="ctrl-label">LEADER DRONE</label>
-              <select id="leader-select" class="ctrl-input" onchange="onLeaderChange(this.value)">
-                <option value="-1">AUTO (lowest sysid)</option>
-              </select>
-            </div>
-
-            <!-- Formation type + spacing -->
-            <div class="ctrl-row ctrl-group">
-              <div>
-                <label class="ctrl-label">FORMATION</label>
-                <select id="formation-type" class="ctrl-input" onchange="onFormationTypeChange(this.value)">
-                  <option value="V" selected>V-SHAPE</option>
-                  <option value="line">LINE</option>
-                  <option value="off">OFF</option>
-                </select>
-              </div>
-              <div>
-                <label class="ctrl-label">SPACING (m) <span id="spacing-val">10</span></label>
-                <input type="range" id="spacing-slider" min="3" max="50" value="10"
-                       oninput="document.getElementById('spacing-val').textContent=this.value">
-              </div>
-            </div>
-
-            <!-- Leader position display -->
-            <div class="info-row">
-              LEADER POS: <span id="leader-pos">WAITING…</span>
-            </div>
-
-            <!-- Target coordinates -->
-            <div class="ctrl-row ctrl-group">
-              <div>
-                <label class="ctrl-label">LAT</label>
-                <input type="number" id="cmd-lat" class="ctrl-input" step="0.000001">
-              </div>
-              <div>
-                <label class="ctrl-label">LON</label>
-                <input type="number" id="cmd-lon" class="ctrl-input" step="0.000001">
-              </div>
-            </div>
-            <div class="ctrl-group">
-              <label class="ctrl-label">ALT AGL (m)</label>
-              <input type="number" id="cmd-alt" class="ctrl-input" value="10" step="1">
-            </div>
-
-            <!-- Command buttons -->
-            <div class="btn-grid" aria-label="Routine flight actions">
-              <button class="swarm-btn success" onclick="swarmCmd('arm')">ARM</button>
-              <button class="swarm-btn" onclick="swarmCmd('takeoff')">TAKEOFF</button>
-              <button class="swarm-btn accent span2" onclick="swarmCmd('fly_to')">FLY TO TARGET</button>
-              <button class="swarm-btn manual span2" id="btn-manual-mode" onclick="toggleManualMode()">MANUAL MODE (RC FOLLOW)</button>
-              <button class="swarm-btn" onclick="swarmCmd('rtl')">RTL</button>
-              <button class="swarm-btn" onclick="swarmCmd('land')">LAND</button>
-            </div>
-          </div>
-        </section>
-        <section class="panel emergency-panel" aria-label="Emergency actions">
-          <div class="panel-title">Emergency actions</div>
-          <div class="panel-body">
-            <div class="btn-grid">
-              <button class="swarm-btn danger span2" onclick="swarmCmd('disarm')" aria-label="Emergency disarm all drones">EMERGENCY DISARM ALL</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- Drone Tracker (collapsible, collapsed by default) -->
-        <section class="panel">
-          <div class="panel-title" onclick="togglePanel('tracker-body','tracker-arrow')">
-            Drone Tracker <span class="toggle-arrow" id="tracker-arrow">▼</span>
-          </div>
-          <div class="panel-body collapsed" id="tracker-body">
-            <div id="tracker-view">
-              <div id="tracker-label">NO TARGET</div>
-            </div>
-            <div style="font-size:10px;color:var(--text-secondary);margin-top:4px;">Click a drone to track.</div>
-          </div>
-        </section>
-
-      </div>
-    </div>
-  </div>
+  </main>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-
   <script src="dashboard.js"></script>
 </body>
 </html>
-
-
-
-
