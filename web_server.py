@@ -1,21 +1,26 @@
-import threading
-import socket
-import sys
-import os
 import base64
 import hashlib
-import struct
 import json
-import time
+import os
 import queue
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+import socket
+import threading
+import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+from websocket_protocol import WebSocketProtocol
 
 # ---- Configuration constants ----
-OUTBOUND_QUEUE_SIZE = 256   # Max messages buffered for WebSocket broadcast before dropping oldest
-LOG_RATE_LIMIT_HZ   = 10.0  # Max log messages broadcast per second to avoid flooding clients
+OUTBOUND_QUEUE_SIZE = (
+    256  # Max messages buffered for WebSocket broadcast before dropping oldest
+)
+LOG_RATE_LIMIT_HZ = (
+    10.0  # Max log messages broadcast per second to avoid flooding clients
+)
+
 
 # ------------------- lightweight WebSocket Server -------------------
-class WebSocketHandler:
+class WebSocketHandler(WebSocketProtocol):
     def __init__(self, conn, addr, server):
         self.conn = conn
         self.addr = addr
@@ -53,8 +58,10 @@ class WebSocketHandler:
                             break
                         try:
                             msg = json.loads(payload)
-                            if CMD_CALLBACK and callable(CMD_CALLBACK) and msg.get("type") in (
-                                "swarm_command", "set_leader"
+                            if (
+                                CMD_CALLBACK
+                                and callable(CMD_CALLBACK)
+                                and msg.get("type") in ("swarm_command", "set_leader")
                             ):
                                 CMD_CALLBACK(msg)
                         except Exception:
@@ -69,93 +76,24 @@ class WebSocketHandler:
             except Exception:
                 pass
 
-    def parse_headers(self, data):
-        headers = {}
-        try:
-            lines = data.decode('utf-8').split('\r\n')
-        except Exception:
-            return headers
-        for line in lines[1:]:
-            if ': ' in line:
-                key, _, val = line.partition(': ')
-                headers[key] = val
-        return headers
-
     def send_handshake(self, key):
         guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         accept_key = base64.b64encode(
-            hashlib.sha1((key + guid).encode('utf-8')).digest()
-        ).decode('utf-8')
+            hashlib.sha1((key + guid).encode("utf-8")).digest()
+        ).decode("utf-8")
         response = (
             "HTTP/1.1 101 Switching Protocols\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Accept: {accept_key}\r\n\r\n"
         )
-        self.conn.send(response.encode('utf-8'))
+        self.conn.send(response.encode("utf-8"))
 
     def send_message(self, message):
         try:
             self.conn.sendall(self.encode_frame(message))
         except Exception:
             self.keep_alive = False
-
-    def decode_frame(self, data):
-        """Return (payload_str, remaining_bytes) or (None, data) if frame incomplete."""
-        try:
-            if len(data) < 2:
-                return None, data
-
-            second_byte = data[1]
-            masked = bool(second_byte & 0x80)
-            length = second_byte & 0x7F
-            idx = 2
-
-            if length == 126:
-                if len(data) < 4:
-                    return None, data
-                length = struct.unpack("!H", data[2:4])[0]
-                idx = 4
-            elif length == 127:
-                if len(data) < 10:
-                    return None, data
-                length = struct.unpack("!Q", data[2:10])[0]
-                idx = 10
-
-            if masked:
-                if len(data) < idx + 4 + length:
-                    return None, data
-                masks = data[idx: idx + 4]
-                idx += 4
-                decoded = bytearray(
-                    data[idx + i] ^ masks[i % 4] for i in range(length)
-                )
-            else:
-                if len(data) < idx + length:
-                    return None, data
-                decoded = data[idx: idx + length]
-
-            remaining = data[idx + length:]
-            return decoded.decode('utf-8'), remaining
-        except Exception:
-            return None, b""
-
-    def encode_frame(self, message):
-        data = message.encode('utf-8')
-        length = len(data)
-        frame = bytearray([0x81])
-
-        if length <= 125:
-            frame.append(length)
-        elif length <= 65535:
-            frame.append(126)
-            frame.extend(struct.pack("!H", length))
-        else:
-            frame.append(127)
-            frame.extend(struct.pack("!Q", length))
-
-        frame.extend(data)
-        return bytes(frame)
 
 
 class IntegratedServer:
@@ -227,7 +165,7 @@ class IntegratedServer:
                 client.send_message(msg)
 
     def _enqueue(self, data_dict):
-        msg = json.dumps(data_dict, separators=(',', ':'))
+        msg = json.dumps(data_dict, separators=(",", ":"))
         try:
             self._out_queue.put_nowait(msg)
         except queue.Full:
@@ -264,8 +202,9 @@ class IntegratedServer:
         now = time.monotonic()
         with self._log_lock:
             elapsed = now - self._log_last_refill
-            self._log_tokens = min(LOG_RATE_LIMIT_HZ,
-                                   self._log_tokens + elapsed * LOG_RATE_LIMIT_HZ)
+            self._log_tokens = min(
+                LOG_RATE_LIMIT_HZ, self._log_tokens + elapsed * LOG_RATE_LIMIT_HZ
+            )
             self._log_last_refill = now
             if self._log_tokens >= 1.0:
                 self._log_tokens -= 1.0

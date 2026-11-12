@@ -7,10 +7,17 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 ## System Requirements & Quick Setup
 
 - **Python**: 3.8+
-- **Automated Setup (Windows)**:
-  Simply double-click `setup_venv.bat` (or run it from PowerShell / CMD). It will automatically create a virtual environment (`venv`), activate it, and install all required packages.
+- **Recommended setup with uv**:
+  Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then sync the project environment from the lockfile:
+  ```bash
+  uv sync
+  uv run DroneContUI.py --sitl --drones 5762 5772
+  ```
 
-- **Manual Setup**:
+- **Legacy Windows setup**:
+  Double-click `setup_venv.bat` (or run it from PowerShell / CMD) to create and populate the `venv` environment.
+
+- **Legacy manual setup**:
   ```bash
   python -m venv venv
   .\venv\Scripts\activate
@@ -22,10 +29,41 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 
 ---
 
+## Launch Instructions
+
+Run these commands from the project directory after `uv sync`.
+
+### Start with SITL
+
+Start one command-line instance for each running SITL drone. For example, if the instances listen on ports `5762` and `5772`:
+
+```bash
+uv run DroneContUI.py --sitl --drones 5762 5772
+```
+
+### Connect to real drones
+
+List each serial port and its configured MAVLink system ID as `PORT:SYSID`:
+
+```bash
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
+```
+
+Replace `COM3` and the system IDs with the values for your telemetry link and flight controllers.
+
+### Open the dashboard or cockpit
+
+The application starts its HTTP dashboard on port `8000` and its WebSocket service on port `8001`. After the drones connect, it opens the dashboard in your default browser at [http://localhost:8000/index.html](http://localhost:8000/index.html).
+
+- Add `--control` to open the optional Tkinter cockpit alongside the web dashboard.
+- Add `--no-browser` to keep the dashboard server running without opening a browser tab. Open the dashboard URL above manually.
+
+---
+
 ## CLI Options & Usage Guide
 
 ```text
-python DroneContUI.py [--sitl | --real] --drones SPEC [SPEC ...] [OPTIONS]
+uv run DroneContUI.py [--sitl | --real] --drones SPEC [SPEC ...] [OPTIONS]
 ```
 
 ### Argument Reference
@@ -52,17 +90,17 @@ When flying 2 physical drones over one telemetry radio (e.g., `COM3`):
 
 #### Command (Standard Web Dashboard):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
 ```
 
 #### Command (With Desktop Tkinter Cockpit UI):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --control
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --control
 ```
 
 #### Command (Headless Server / No Auto-Browser):
 ```bash
-python DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
+uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
 ```
 
 ---
@@ -73,12 +111,12 @@ Run ArduPilot SITL instances locally (e.g., instance 0 on port 5762, instance 1 
 
 #### Command:
 ```bash
-python DroneContUI.py --sitl --drones 5762 5772
+uv run DroneContUI.py --sitl --drones 5762 5772
 ```
 
 #### Command (With Tkinter GUI):
 ```bash
-python DroneContUI.py --sitl --drones 5762 5772 --control
+uv run DroneContUI.py --sitl --drones 5762 5772 --control
 ```
 
 ---

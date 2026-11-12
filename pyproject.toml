@@ -1,0 +1,11 @@
+[project]
+name = "swarmcontrol"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = [
+    "pymavlink>=2.4.40",
+    "pyserial>=3.5",
+]
+
+[tool.uv]
+package = false
