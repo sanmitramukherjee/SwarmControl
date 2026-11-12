@@ -1,0 +1,193 @@
+{
+  "version": 0,
+  "files": {
+    "commands.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 52,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 52,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 57,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 21,
+        "endColumn": 56,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 61,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 61,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 52,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 21,
+        "endColumn": 53,
+        "lineCount": 1
+      }
+    ],
+    "swarmcontrol/connections.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 19,
+        "endColumn": 42,
+        "lineCount": 1
+      }
+    ],
+    "swarmcontrol/gui.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 36,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 41,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 41,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 16,
+        "endColumn": 37,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 16,
+        "endColumn": 39,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 16,
+        "endColumn": 40,
+        "lineCount": 1
+      }
+    ],
+    "swarmcontrol/swarm.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 29,
+        "lineCount": 1
+      }
+    ],
+    "swarmcontrol/telemetry.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 16,
+        "endColumn": 51,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 42,
+        "endColumn": 84,
+        "lineCount": 1
+      }
+    ],
+    "tests/test_swarm_sequences.py": [
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 19,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 23,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-attribute",
+        "startColumn": 12,
+        "endColumn": 26,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 23,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 27,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 24,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 19,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 12,
+        "endColumn": 27,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 8,
+        "endColumn": 19,
+        "lineCount": 1
+      },
+      {
+        "rule": "missing-union-attribute",
+        "startColumn": 25,
+        "endColumn": 40,
+        "lineCount": 1
+      }
+    ],
+    "web_server.py": [
+      {
+        "rule": "invalid-assignment",
+        "startColumn": 8,
+        "endColumn": 27,
+        "lineCount": 1
+      }
+    ]
+  }
+}

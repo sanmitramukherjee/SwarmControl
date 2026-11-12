@@ -1,0 +1,21 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-fix
+        name: Ruff lint and safe fixes
+        entry: uv run --locked ruff check --fix
+        language: system
+        types: [python]
+        require_serial: true
+      - id: ruff-format
+        name: Ruff formatter
+        entry: uv run --locked ruff format
+        language: system
+        types: [python]
+        require_serial: true
+      - id: ty-check
+        name: ty type check
+        entry: uv run --locked ty check
+        language: system
+        pass_filenames: false
+        always_run: true
