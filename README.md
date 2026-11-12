@@ -9,6 +9,7 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
 - **Python**: 3.8+
 - **Recommended setup with uv**:
   Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then sync the project environment from the lockfile:
+
   ```bash
   uv sync
   uv run DroneContUI.py --sitl --drones 5762 5772
@@ -18,11 +19,13 @@ A multi-drone Ground Control Station (GCS) and Swarm Command Center for ArduPilo
   Double-click `setup_venv.bat` (or run it from PowerShell / CMD) to create and populate the `venv` environment.
 
 - **Legacy manual setup**:
+
   ```bash
   python -m venv venv
   .\venv\Scripts\activate
   pip install -r requirements.txt
   ```
+
 - **Hardware Telemetry Link (for Real Drones)**:
   - Telemetry radio modem (e.g. SiK Radio, Holybro Telemetry, RFD900) plugged into your USB/COM port.
   - Multi-drone setups require each flight controller configured with a unique MAVLink `SYSID_THISMAV` (e.g., Drone 1 = `1`, Drone 2 = `2`) communicating over the same air frequency/baud rate.
@@ -84,21 +87,25 @@ uv run DroneContUI.py [--sitl | --real] --drones SPEC [SPEC ...] [OPTIONS]
 ### 1. Real Drones (2 Drones over a Single COM Port)
 
 When flying 2 physical drones over one telemetry radio (e.g., `COM3`):
+
 - Ensure Drone 1 is set to `SYSID_THISMAV = 1`.
 - Ensure Drone 2 is set to `SYSID_THISMAV = 2`.
 - Telemetry radio baud is set to `57600` (or `115200` depending on radio config).
 
-#### Command (Standard Web Dashboard):
+#### Command (Standard Web Dashboard)
+
 ```bash
 uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600
 ```
 
-#### Command (With Desktop Tkinter Cockpit UI):
+#### Command (With Desktop Tkinter Cockpit UI)
+
 ```bash
 uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --control
 ```
 
-#### Command (Headless Server / No Auto-Browser):
+#### Command (Headless Server / No Auto-Browser)
+
 ```bash
 uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
 ```
@@ -109,12 +116,14 @@ uv run DroneContUI.py --real --drones COM3:1 COM3:2 --baud 57600 --no-browser
 
 Run ArduPilot SITL instances locally (e.g., instance 0 on port 5762, instance 1 on port 5772):
 
-#### Command:
+#### Command
+
 ```bash
 uv run DroneContUI.py --sitl --drones 5762 5772
 ```
 
-#### Command (With Tkinter GUI):
+#### Command (With Tkinter GUI)
+
 ```bash
 uv run DroneContUI.py --sitl --drones 5762 5772 --control
 ```
